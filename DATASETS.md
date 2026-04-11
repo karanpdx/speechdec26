@@ -24,11 +24,11 @@
 - Files: .nii.gz
 - Why: Most cited fMRI narrative language dataset
 
-## MEG — MASC-MEG (ag3kj) ⚠️ MISSING FIF FILES
-- Source: osf.io/ag3kj
-- Content: MEG during story listening, 27 subjects, word-level labels
-- Location: ag3kj/osfstorage/ (TSV labels only, no .fif recordings)
-- Status: Need to locate or re-download .fif files
+## MEG — MASC-MEG ✅ COMPLETE
+- Size: 18GB
+- Subjects: sub-01, sub-02, sub-05, sub-07, sub-08 (5 subjects, 2 sessions each)
+- File format: .con (KIT/Yokogawa system) — use mne.io.read_raw_kit()
+- Location: ag3kj/osfstorage/
 
 ## EEG — EEGMMIDB ✅ BASELINE
 - Source: physionet.org/content/eegmmidb/1.0.0/
