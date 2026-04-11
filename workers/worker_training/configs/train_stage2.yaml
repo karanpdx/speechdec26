@@ -1,0 +1,35 @@
+# Stage 2 Training Configuration
+# Run ONLY after Stage 1 has converged and been validated.
+
+stage1_checkpoint: checkpoints/stage1/best.pt
+split_file: data/splits/split_v1.json
+vocab_embeddings: data/processed/vocab_embeddings.npz
+
+# Model dimensions (must match Stage 1 config)
+embed_dim: 768
+eeg_channels: 64
+eeg_timepoints: 175
+meg_channels: 306
+meg_timepoints: 175
+fmri_voxels: 1000
+subject_embed_dim: 64
+n_subjects: null             # REQUIRED
+
+# Loss weights
+mse_weight: 1.0
+freq_domain_weight: 0.1      # PSD loss for EEG/MEG
+spatial_smooth_weight: 0.05  # adjacent voxel smoothness for fMRI
+spatial_smooth_max_dist_mm: 6.0  # voxels within this distance are adjacent
+
+# Training
+batch_size: 32
+lr: 1.0e-4
+weight_decay: 1.0e-4
+n_epochs: 30
+grad_clip: 1.0
+device: cuda
+
+# Logging
+checkpoint_dir: checkpoints/stage2/
+log_every_n_steps: 10
+val_every_n_epochs: 5

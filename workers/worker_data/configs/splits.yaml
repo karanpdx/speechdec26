@@ -1,0 +1,23 @@
+# Dataset Alignment and Split Configuration
+
+# Subject IDs held out for validation (never seen during training)
+val_subjects: []            # e.g. ["sub-09", "sub-10"]
+
+# Subject IDs held out for test (never seen during training OR validation)
+test_subjects: []           # e.g. ["sub-11", "sub-12"]
+
+# Vocabulary filtering
+min_word_freq: 5            # min occurrences across training subjects (all modalities combined)
+vocab_source: "intersection" # 'intersection': word in all modalities | 'union': word in any
+
+# Reproducibility
+seed: 42
+
+# Processed data directories (relative to repo root)
+processed_dirs:
+  eeg: null                 # e.g. "data/processed/brennan2019/eeg"
+  meg: null                 # or null to exclude a modality
+  fmri: null
+
+output_split_path: "data/splits/split_v1.json"
+output_vocab_path: "data/processed/vocab_embeddings.npz"

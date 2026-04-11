@@ -1,0 +1,19 @@
+# fMRI Preprocessing Configuration
+
+dataset_name: null
+subjects: "all"
+
+# GLM parameters
+tr: null                    # repetition time in seconds (REQUIRED — check dataset card)
+hrf_model: "spm"            # 'spm', 'glover', or 'fir'
+smoothing_fwhm: 6.0         # spatial smoothing kernel (mm)
+high_pass: 0.01             # high-pass filter cutoff (Hz)
+
+# Masking
+mask: null                  # path to brain mask NIfTI, or null to auto-compute
+roi_mask: null              # path to language ROI mask, or null
+
+# PCA (optional dimensionality reduction)
+n_pca_components: null      # set to int to apply PCA, null to keep all voxels
+
+output_dir: "data/processed"

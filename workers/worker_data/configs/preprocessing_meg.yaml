@@ -1,0 +1,30 @@
+# MEG Preprocessing Configuration
+
+dataset_name: null
+subjects: "all"
+
+# Maxwell filtering (Elekta/MEGIN systems)
+apply_maxwell: true         # set false for non-Elekta systems
+crosstalk_file: null        # path to crosstalk file, or null
+fine_cal_file: null         # path to fine calibration file, or null
+
+# Filtering
+l_freq: 0.1
+h_freq: 40.0
+notch_freqs: [50.0]
+
+# Epoching
+epoch_tmin: -0.1
+epoch_tmax: 0.6
+baseline: [-0.1, 0.0]
+
+# Resampling
+target_sfreq: 256.0
+
+# ICA
+n_ica_components: 20
+
+# Epoch rejection
+reject_threshold: null
+
+output_dir: "data/processed"

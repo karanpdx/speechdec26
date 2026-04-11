@@ -1,0 +1,26 @@
+# EEG Preprocessing Configuration
+# Fill in dataset_name and subjects before running.
+
+dataset_name: null          # e.g. brennan2019
+subjects: "all"             # list of subject IDs or "all"
+
+# Filtering
+l_freq: 0.1                 # high-pass cutoff (Hz)
+h_freq: 40.0                # low-pass cutoff (Hz)
+notch_freqs: [50.0]         # set to [60.0] for US datasets
+
+# Epoching
+epoch_tmin: -0.1            # epoch start relative to word onset (s)
+epoch_tmax: 0.6             # epoch end relative to word onset (s)
+baseline: [-0.1, 0.0]       # baseline window (s), or null to disable
+
+# Resampling
+target_sfreq: 256.0         # resample to this rate (Hz)
+
+# ICA
+n_ica_components: 20        # ICA components to fit
+
+# Epoch rejection
+reject_threshold: null      # peak-to-peak threshold in V, or null to disable
+
+output_dir: "data/processed"

@@ -1,0 +1,36 @@
+# Stage 1 Training Configuration
+
+# Data
+split_file: data/splits/split_v1.json
+vocab_embeddings: data/processed/vocab_embeddings.npz
+modalities: [eeg, meg, fmri]
+
+# Model dimensions (must match preprocessing configs)
+embed_dim: 768
+eeg_channels: 64
+eeg_timepoints: 175
+meg_channels: 306
+meg_timepoints: 175
+fmri_voxels: 1000          # set to n_pca_components if PCA was applied
+subject_embed_dim: 64
+n_subjects: null            # REQUIRED — set to total number of subjects in dataset
+share_temporal_weights: false
+
+# Loss weights
+lambda_cross_modal: 0.5
+lambda_subject_adversarial: 0.1
+adversarial_alpha_schedule: linear   # increase alpha from 0 to 1 over all training epochs
+
+# Training
+batch_size: 64
+lr: 3.0e-4
+weight_decay: 1.0e-4
+n_epochs: 50
+warmup_epochs: 5
+grad_clip: 1.0
+device: cuda                # set to 'cpu' if no GPU available
+
+# Logging
+checkpoint_dir: checkpoints/stage1/
+log_every_n_steps: 10
+val_every_n_epochs: 5
