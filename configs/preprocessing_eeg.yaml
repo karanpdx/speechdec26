@@ -1,0 +1,19 @@
+# EEG Preprocessing Configuration
+# Fill in dataset_name and subjects before running.
+
+dataset_name: null
+subjects: "all"
+
+l_freq: 0.1
+h_freq: 40.0
+notch_freqs: [50.0]
+
+epoch_tmin: -0.1
+epoch_tmax: 0.6
+baseline: [-0.1, 0.0]
+
+target_sfreq: 256.0
+n_ica_components: 20
+reject_threshold: null
+
+output_dir: "data/processed"

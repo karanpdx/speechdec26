@@ -26,6 +26,35 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+class _NumpyPCA:
+    """Minimal PCA fallback with sklearn-like fit_transform/transform interface."""
+
+    def __init__(self, n_components: int):
+        self.n_components = n_components
+        self.mean_: np.ndarray | None = None
+        self.components_: np.ndarray | None = None
+        self.explained_variance_ratio_: np.ndarray | None = None
+
+    def fit_transform(self, data: np.ndarray) -> np.ndarray:
+        self.mean_ = data.mean(axis=0, keepdims=True)
+        centered = data - self.mean_
+        _, singular_values, vt = np.linalg.svd(centered, full_matrices=False)
+        self.components_ = vt[: self.n_components]
+        total_var = np.square(singular_values).sum()
+        kept_var = np.square(singular_values[: self.n_components])
+        if total_var > 0:
+            self.explained_variance_ratio_ = (kept_var / total_var).astype(np.float32)
+        else:
+            self.explained_variance_ratio_ = np.zeros(self.n_components, dtype=np.float32)
+        return centered @ self.components_.T
+
+    def transform(self, data: np.ndarray) -> np.ndarray:
+        if self.mean_ is None or self.components_ is None:
+            raise ValueError("PCA fallback must be fit before transform()")
+        centered = data - self.mean_
+        return centered @ self.components_.T
+
+
 def load_bold(nifti_path: str) -> tuple:
     """
     Load BOLD NIfTI image. Confirms shape is (x, y, z, n_timepoints).
@@ -302,7 +331,10 @@ def apply_pca(data: np.ndarray, n_components: int, fit: bool = True, pca=None):
     Returns:
         Tuple of (projected float32 (n_words, n_components), sklearn PCA object).
     """
-    from sklearn.decomposition import PCA
+    try:
+        from sklearn.decomposition import PCA
+    except ModuleNotFoundError:
+        PCA = _NumpyPCA
     if fit:
         actual = min(n_components, min(data.shape[0], data.shape[1]))
         pca = PCA(n_components=actual)

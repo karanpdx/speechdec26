@@ -1,0 +1,18 @@
+# Dataset Alignment and Split Configuration
+
+val_subjects: []
+test_subjects: []
+
+min_word_freq: 5
+vocab_source: "intersection"
+target_vocab_size: 10
+
+seed: 42
+
+processed_dirs:
+  eeg: null
+  meg: null
+  fmri: null
+
+output_split_path: "data/splits/split_v1.json"
+output_vocab_path: "data/processed/vocab_embeddings.npz"

@@ -1,0 +1,32 @@
+# Stage 1 Training Configuration
+
+split_file: data/splits/split_v1.json
+vocab_embeddings: data/processed/vocab_embeddings.npz
+processed_base_dir: null
+modalities: [eeg, meg, fmri]
+
+embed_dim: 768
+eeg_channels: 64
+eeg_timepoints: 175
+meg_channels: 306
+meg_timepoints: 175
+fmri_voxels: 1000
+subject_embed_dim: 64
+n_subjects: null
+share_temporal_weights: false
+
+lambda_cross_modal: 0.5
+lambda_subject_adversarial: 0.1
+adversarial_alpha_schedule: linear
+
+batch_size: 64
+lr: 3.0e-4
+weight_decay: 1.0e-4
+n_epochs: 50
+warmup_epochs: 5
+grad_clip: 1.0
+device: cuda
+
+checkpoint_dir: checkpoints/stage1/
+log_every_n_steps: 10
+val_every_n_epochs: 5
