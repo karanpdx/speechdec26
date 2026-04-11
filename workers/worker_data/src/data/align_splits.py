@@ -30,7 +30,14 @@ def build_vocabulary(processed_dirs: dict[str, str]) -> list[str]:
     Returns:
         Sorted list of unique word strings.
     """
-    raise NotImplementedError
+    vocabulary = set()
+    for modality, dir_path in processed_dirs.items():
+        if not dir_path:
+            continue
+        for npz_path in sorted(Path(dir_path).glob("*.npz")):
+            with np.load(npz_path, allow_pickle=True) as data:
+                vocabulary.update(str(label) for label in data["labels"].tolist())
+    return sorted(vocabulary)
 
 
 def filter_vocabulary(
@@ -54,7 +61,32 @@ def filter_vocabulary(
     Returns:
         Filtered vocabulary list.
     """
-    raise NotImplementedError
+    freq_counts: dict[str, int] = {word: 0 for word in vocabulary}
+    modality_presence: dict[str, set[str]] = {word: set() for word in vocabulary}
+
+    for modality, dir_path in processed_dirs.items():
+        if not dir_path:
+            continue
+        for npz_path in sorted(Path(dir_path).glob("*.npz")):
+            subject_id = Path(npz_path).name.split("_")[0]
+            if subject_id not in train_subject_ids:
+                continue
+            with np.load(npz_path, allow_pickle=True) as data:
+                labels = [str(label) for label in data["labels"].tolist()]
+            for label in labels:
+                if label in freq_counts:
+                    freq_counts[label] += 1
+                    modality_presence[label].add(modality)
+
+    active_modalities = {name for name, path in processed_dirs.items() if path}
+    filtered = []
+    for word in vocabulary:
+        if freq_counts[word] < min_word_freq:
+            continue
+        if vocab_source == "intersection" and modality_presence[word] != active_modalities:
+            continue
+        filtered.append(word)
+    return sorted(filtered)
 
 
 def generate_splits(
@@ -77,7 +109,32 @@ def generate_splits(
                'val':   {'eeg': [...], ...},
                'test':  {'eeg': [...], ...}}
     """
-    raise NotImplementedError
+    vocab_set = set(vocabulary)
+    splits = {
+        "train": {modality: [] for modality in processed_dirs if processed_dirs[modality]},
+        "val": {modality: [] for modality in processed_dirs if processed_dirs[modality]},
+        "test": {modality: [] for modality in processed_dirs if processed_dirs[modality]},
+    }
+
+    for modality, dir_path in processed_dirs.items():
+        if not dir_path:
+            continue
+        for npz_path in sorted(Path(dir_path).glob("*.npz")):
+            with np.load(npz_path, allow_pickle=True) as data:
+                labels = {str(label) for label in data["labels"].tolist()}
+            if not (labels & vocab_set):
+                continue
+
+            subject_id = npz_path.name.split("_")[0]
+            if subject_id in test_subjects:
+                split_name = "test"
+            elif subject_id in val_subjects:
+                split_name = "val"
+            else:
+                split_name = "train"
+            splits[split_name][modality].append(str(npz_path))
+
+    return splits
 
 
 def verify_split_integrity(splits: dict, val_subjects: list[str], test_subjects: list[str]) -> None:
@@ -124,7 +181,16 @@ def print_split_statistics(splits: dict, vocabulary: list[str]) -> None:
         splits: Output of generate_splits().
         vocabulary: Filtered vocabulary list.
     """
-    raise NotImplementedError
+    logger.info(f"Vocabulary size: {len(vocabulary)}")
+    for split_name, split_modalities in splits.items():
+        logger.info(f"Split: {split_name}")
+        for modality, files in split_modalities.items():
+            subject_ids = sorted({Path(path).name.split('_')[0] for path in files})
+            logger.info(
+                f"  {modality}: {len(files)} file(s), {len(subject_ids)} subject(s)"
+            )
+            if not files:
+                logger.warning(f"  {modality}: zero samples in {split_name}")
 
 
 def save_splits(splits: dict, output_path: str) -> str:
@@ -138,7 +204,12 @@ def save_splits(splits: dict, output_path: str) -> str:
     Returns:
         Path to saved JSON file.
     """
-    raise NotImplementedError
+    out_path = Path(output_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8") as handle:
+        json.dump(splits, handle, indent=2)
+    logger.info(f"Saved split file: {out_path}")
+    return str(out_path)
 
 
 def run_alignment(config_path: str) -> tuple[str, str]:
@@ -153,4 +224,50 @@ def run_alignment(config_path: str) -> tuple[str, str]:
     Returns:
         Tuple of (split_json_path, vocab_embeddings_path).
     """
-    raise NotImplementedError
+    import yaml
+
+    from .vocab_embeddings import run as run_vocab_embeddings
+
+    with open(config_path, encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+
+    processed_dirs = {
+        modality: path
+        for modality, path in config.get("processed_dirs", {}).items()
+        if path
+    }
+    if not processed_dirs:
+        raise ValueError("No processed_dirs configured in splits config")
+
+    all_subject_ids = set()
+    for dir_path in processed_dirs.values():
+        for npz_path in Path(dir_path).glob("*.npz"):
+            all_subject_ids.add(npz_path.name.split("_")[0])
+
+    val_subjects = config.get("val_subjects", [])
+    test_subjects = config.get("test_subjects", [])
+    train_subjects = sorted(all_subject_ids - set(val_subjects) - set(test_subjects))
+
+    vocabulary = build_vocabulary(processed_dirs)
+    vocabulary = filter_vocabulary(
+        vocabulary=vocabulary,
+        processed_dirs=processed_dirs,
+        train_subject_ids=train_subjects,
+        min_word_freq=config.get("min_word_freq", 5),
+        vocab_source=config.get("vocab_source", "intersection"),
+    )
+    if not vocabulary:
+        raise ValueError("Filtered vocabulary is empty; cannot generate splits")
+
+    splits = generate_splits(
+        processed_dirs=processed_dirs,
+        val_subjects=val_subjects,
+        test_subjects=test_subjects,
+        vocabulary=vocabulary,
+    )
+    verify_split_integrity(splits, val_subjects, test_subjects)
+    print_split_statistics(splits, vocabulary)
+
+    split_path = save_splits(splits, config["output_split_path"])
+    vocab_path = run_vocab_embeddings(vocabulary, config["output_vocab_path"])
+    return split_path, vocab_path
