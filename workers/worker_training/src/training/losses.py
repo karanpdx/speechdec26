@@ -8,7 +8,6 @@ Classes:
 """
 
 import logging
-import math
 
 import torch
 import torch.nn as nn
@@ -43,10 +42,12 @@ class ContrastiveLoss(nn.Module):
             learnable_temp: If True, temperature is an nn.Parameter.
         """
         super().__init__()
+        import math
+        log_temp = math.log(temperature_init)
         if learnable_temp:
-            self.log_temp = nn.Parameter(torch.tensor(math.log(temperature_init)))
+            self.log_temperature = nn.Parameter(torch.tensor(log_temp))
         else:
-            self.register_buffer('log_temp', torch.tensor(math.log(temperature_init)))
+            self.register_buffer("log_temperature", torch.tensor(log_temp))
 
     def forward(self, neural_emb: Tensor, text_emb: Tensor) -> Tensor:
         """
@@ -60,16 +61,26 @@ class ContrastiveLoss(nn.Module):
         Raises:
             ValueError: If batch size == 1.
         """
-        if neural_emb.shape[0] == 1:
-            raise ValueError("Contrastive loss is undefined for batch size 1")
-        n = F.normalize(neural_emb, dim=-1)
-        t = F.normalize(text_emb, dim=-1)
-        temp = torch.clamp(self.log_temp, min=math.log(0.01), max=math.log(100)).exp()
-        logits = temp * (n @ t.T)
-        batch = neural_emb.shape[0]
-        labels = torch.arange(batch, device=neural_emb.device)
-        loss = (F.cross_entropy(logits, labels) + F.cross_entropy(logits.T, labels)) / 2
-        return loss
+        import math
+        batch_size = neural_emb.shape[0]
+        if batch_size == 1:
+            raise ValueError("Contrastive loss is undefined for batch size 1.")
+
+        # Clamp log_temperature to [log(0.01), log(100)]
+        log_temp_clamped = self.log_temperature.clamp(math.log(0.01), math.log(100))
+        temperature = log_temp_clamped.exp()
+
+        # L2 normalize
+        neural_emb = F.normalize(neural_emb, dim=-1)
+        text_emb = F.normalize(text_emb, dim=-1)
+
+        # Compute similarity matrix
+        logits = (neural_emb @ text_emb.T) / temperature  # (batch, batch)
+
+        labels = torch.arange(batch_size, device=neural_emb.device)
+        loss_n2t = F.cross_entropy(logits, labels)
+        loss_t2n = F.cross_entropy(logits.T, labels)
+        return (loss_n2t + loss_t2n) / 2
 
 
 class CrossModalAlignmentLoss(nn.Module):
@@ -90,7 +101,8 @@ class CrossModalAlignmentLoss(nn.Module):
 
     def __init__(self, temperature_init: float = 0.07):
         super().__init__()
-        self.contrastive = ContrastiveLoss(temperature_init=temperature_init)
+        import math
+        self.log_temperature = nn.Parameter(torch.tensor(math.log(temperature_init)))
 
     def forward(
         self,
@@ -107,12 +119,25 @@ class CrossModalAlignmentLoss(nn.Module):
         Returns:
             Scalar loss, or torch.tensor(0.0, requires_grad=True) if < 2 matched samples.
         """
+        import math
         n_matched = shared_label_mask.sum().item()
         if n_matched < 2:
-            return torch.tensor(0.0, requires_grad=True)
+            return torch.tensor(0.0, requires_grad=True, device=emb_a.device)
+
         a = emb_a[shared_label_mask]
         b = emb_b[shared_label_mask]
-        return self.contrastive(a, b)
+
+        log_temp_clamped = self.log_temperature.clamp(math.log(0.01), math.log(100))
+        temperature = log_temp_clamped.exp()
+
+        a = F.normalize(a, dim=-1)
+        b = F.normalize(b, dim=-1)
+
+        logits = (a @ b.T) / temperature
+        labels = torch.arange(int(n_matched), device=emb_a.device)
+        loss_a2b = F.cross_entropy(logits, labels)
+        loss_b2a = F.cross_entropy(logits.T, labels)
+        return (loss_a2b + loss_b2a) / 2
 
 
 class GradientReversalFunction(torch.autograd.Function):
