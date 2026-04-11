@@ -78,9 +78,7 @@ def compute_retrieval_metrics(
     hits = {k: 0 for k in k_values}
 
     for i, label in enumerate(labels):
-        gt_idx = vocab_index.get(label)
-        if gt_idx is None:
-            continue
+        gt_idx = vocab_index[label]  # will never be missing — validator already caught it
 
         ranked = ranked_indices[i]
         # np.where returns a tuple; [0][0] gives the position
@@ -206,9 +204,9 @@ def compute_cross_modal_alignment(
     # one EEG sample and one MEG sample that share the same word label
     matched_eeg_idx, matched_meg_idx = [], []
     for i, label in enumerate(eeg_labels):
-        if label in meg_label_map:
+        for meg_idx in meg_label_map.get(label, []):
             matched_eeg_idx.append(i)
-            matched_meg_idx.append(meg_label_map[label][0])
+            matched_meg_idx.append(meg_idx)
 
     if not matched_eeg_idx:
         return {"matched_similarity": 0.0, "random_similarity": 0.0,
@@ -265,7 +263,9 @@ def compute_abstention_curve(
                                     with maximum coverage (or None if 80% unreachable)
     """
     _validate_retrieval_inputs(neural_embeddings, text_embeddings, labels, vocab)
-    
+    if len(vocab) < 2:
+        raise ValueError("vocab must contain at least 2 entries to compute a confidence gap")
+
     if confidence_thresholds is None:
         confidence_thresholds = np.linspace(0, 1, 50)
 
@@ -321,20 +321,35 @@ def extract_failure_cases(
     vocab: list,
     max_cases: int = 10,
 ) -> list:
-    """
-    Return representative failure cases:
-    [
-        {
-            "true_label": "apple",
-            "predicted_label": "banana",
-            "top3_predictions": ["banana", "pear", "apple"],
-            "scores": [0.81, 0.73, 0.69],
-            "rank": 3,
-        },
-        ...
-    ]
-    """
-    
+    _validate_retrieval_inputs(neural_embeddings, text_embeddings, labels, vocab)
+
+    def normalize(x):
+        return x / (np.linalg.norm(x, axis=1, keepdims=True) + 1e-8)
+
+    sim = normalize(neural_embeddings) @ normalize(text_embeddings).T
+    vocab_index = {w: i for i, w in enumerate(vocab)}
+    predicted = np.argmax(sim, axis=1)
+
+    cases = []
+    for i, label in enumerate(labels):
+        gt_idx = vocab_index[label]
+        if predicted[i] == gt_idx:
+            continue  # skip correct predictions
+
+        # top 3 predictions by score
+        top3_idx = np.argsort(-sim[i])[:3]
+        cases.append({
+            "true_label":       label,
+            "predicted_label":  vocab[predicted[i]],
+            "top3_predictions": [vocab[j] for j in top3_idx],
+            "scores":           [float(sim[i, j]) for j in top3_idx],
+            "rank":             int(np.where(np.argsort(-sim[i]) == gt_idx)[0][0]) + 1,
+        })
+        if len(cases) >= max_cases:
+            break
+
+    return cases
+
 
 def generate_stage1_report(
     test_metrics: dict,
@@ -366,8 +381,9 @@ def generate_stage1_report(
         Path to written report.
     """
     import os
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
+    dirpath = os.path.dirname(output_path)
+    if dirpath:
+        os.makedirs(dirpath, exist_ok=True)
     lines = []
 
     # Helper: appends a line to the report buffer
@@ -481,12 +497,12 @@ def generate_stage1_report(
     w()
     w("## 5. Representative failure cases")
     w()
-    w("| # | True label | Top-3 predictions | Scores |")
-    w("|---|------------|-------------------|--------|")
+    w("| # | True label | Predicted | Top-3 predictions | Scores | Rank |")
+    w("|---|------------|-----------|-------------------|--------|------|")
     for idx, case in enumerate(failure_cases[:10], 1):
         preds  = ", ".join(case["top3_predictions"])
         scores = ", ".join(f"{s:.3f}" for s in case["scores"])
-        w(f"| {idx} | {case['true_label']} | {preds} | {scores} |")
+        w(f"| {idx} | {case['true_label']} | {case['predicted_label']} | {preds} | {scores} | {case['rank']} |")
 
     # ------------------------------------------------------------------ #
     # Write the accumulated lines to disk as a single markdown file
