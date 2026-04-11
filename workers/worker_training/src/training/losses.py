@@ -159,7 +159,11 @@ class SubjectAdversarialLoss(nn.Module):
             hidden_dim: Hidden layer size of the subject classifier.
         """
         super().__init__()
-        raise NotImplementedError
+        self.classifier = nn.Sequential(
+            nn.Linear(embed_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, n_subjects),
+        )
 
     def forward(
         self,
@@ -177,4 +181,6 @@ class SubjectAdversarialLoss(nn.Module):
         Returns:
             Scalar cross-entropy loss (reversed via GradientReversalFunction).
         """
-        raise NotImplementedError
+        reversed_emb = GradientReversalFunction.apply(shared_emb, alpha)
+        logits = self.classifier(reversed_emb)
+        return F.cross_entropy(logits, subject_ids)
