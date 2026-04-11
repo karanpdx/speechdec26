@@ -86,7 +86,16 @@ def build_shared_label_mask(batch: list[dict]) -> torch.Tensor:
     Returns:
         (batch_size,) bool tensor.
     """
-    raise NotImplementedError
+    label_to_modalities: dict[str, set[str]] = {}
+    for sample in batch:
+        label = sample["label"]
+        modality = sample["modality"]
+        if label not in label_to_modalities:
+            label_to_modalities[label] = set()
+        label_to_modalities[label].add(modality)
+
+    mask = [len(label_to_modalities[sample["label"]]) > 1 for sample in batch]
+    return torch.tensor(mask, dtype=torch.bool)
 
 
 def collate_fn(batch: list[dict]) -> dict:
@@ -106,29 +115,4 @@ def collate_fn(batch: list[dict]) -> dict:
         }
         Modalities with no samples in this batch are absent from the dict.
     """
-    # Group items by modality
-    groups: dict[str, list[dict]] = {}
-    for item in batch:
-        modality = item["modality"]
-        if modality not in groups:
-            groups[modality] = []
-        groups[modality].append(item)
-
-    result: dict = {}
-    for modality, items in groups.items():
-        result[modality] = {
-            "data": torch.stack([item["data"] for item in items]),
-            "label_idx": torch.tensor([item["label_idx"] for item in items], dtype=torch.long),
-            "bert_emb": torch.stack([item["bert_emb"] for item in items]),
-            "subject_idx": torch.tensor([item["subject_idx"] for item in items], dtype=torch.long),
-            "labels": [item["label"] for item in items],
-        }
-
-    # build_shared_label_mask is implemented in plan 02-03; fall back to all-False mask
-    # until that plan runs. This keeps collate_fn functional without a hard dependency.
-    try:
-        result["shared_label_mask"] = build_shared_label_mask(batch)
-    except NotImplementedError:
-        result["shared_label_mask"] = torch.zeros(len(batch), dtype=torch.bool)
-
-    return result
+    raise NotImplementedError
