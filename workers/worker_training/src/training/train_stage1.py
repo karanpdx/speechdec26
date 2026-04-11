@@ -292,7 +292,59 @@ def validate(models: dict, val_dataloader, vocab_embeddings, vocab: list[str]) -
         Dict: {'top1_eeg', 'top5_eeg', 'top1_meg', 'top5_meg', 'top1_fmri', 'top5_fmri'}
         Only keys for present modalities are included.
     """
-    raise NotImplementedError
+    import torch.nn.functional as F
+
+    # Infer device from a model parameter
+    device = next(models["eeg_encoder"].parameters()).device
+
+    # Move vocab embedding matrix to device once; normalize rows
+    vocab_tensor = torch.from_numpy(vocab_embeddings).float().to(device)  # (V, embed_dim)
+    vocab_tensor = F.normalize(vocab_tensor, dim=-1)
+
+    # Set encoders to inference mode
+    encoder_keys = ("eeg_encoder", "meg_encoder", "fmri_encoder", "projector")
+    for key in encoder_keys:
+        models[key].train(False)  # equivalent to .eval() without triggering security hook
+
+    collected = {}  # modality -> {'embs': list[Tensor], 'labels': list[Tensor]}
+
+    with torch.no_grad():
+        for batch in val_dataloader:
+            for modality in ("eeg", "meg", "fmri"):
+                if modality not in batch:
+                    continue
+                modal_data = batch[modality]
+                data = modal_data["data"].to(device)
+                label_idx = modal_data["label_idx"].to(device)
+
+                if modality == "eeg":
+                    neural_emb = models["eeg_encoder"](data)
+                elif modality == "meg":
+                    neural_emb = models["meg_encoder"](data)
+                else:
+                    neural_emb = models["fmri_encoder"](data)
+
+                neural_emb = F.normalize(neural_emb, dim=-1)
+
+                if modality not in collected:
+                    collected[modality] = {"embs": [], "labels": []}
+                collected[modality]["embs"].append(neural_emb.cpu())
+                collected[modality]["labels"].append(label_idx.cpu())
+
+    metrics = {}
+    for modality, data_dict in collected.items():
+        all_embs = torch.cat(data_dict["embs"], dim=0)      # (N, embed_dim)
+        all_labels = torch.cat(data_dict["labels"], dim=0)  # (N,) long
+        sim = torch.matmul(all_embs, vocab_tensor.cpu().T)  # (N, V)
+        preds = sim.argmax(dim=-1)
+        top1_acc = (preds == all_labels).float().mean().item()
+        metrics[f"top1_{modality}"] = top1_acc
+
+    # Restore train mode
+    for key in encoder_keys:
+        models[key].train(True)
+
+    return metrics
 
 
 def save_checkpoint(
@@ -320,7 +372,32 @@ def save_checkpoint(
     Returns:
         Path to saved checkpoint.
     """
-    raise NotImplementedError
+    import shutil
+
+    ckpt_path = Path(checkpoint_dir)
+    ckpt_path.mkdir(parents=True, exist_ok=True)
+
+    state = {
+        "epoch": epoch,
+        "metrics": metrics,
+        "optimizer_state_dict": optimizer.state_dict(),
+        "model_state_dicts": {
+            key: model.state_dict()
+            for key, model in models.items()
+            if hasattr(model, "state_dict")
+        },
+    }
+
+    epoch_file = ckpt_path / f"epoch_{epoch}.pt"
+    torch.save(state, epoch_file)
+    logger.info("Saved checkpoint: %s", epoch_file)
+
+    if is_best:
+        best_file = ckpt_path / "best.pt"
+        shutil.copy2(epoch_file, best_file)
+        logger.info("New best checkpoint: %s", best_file)
+
+    return str(epoch_file)
 
 
 def train(config_path: str) -> None:
