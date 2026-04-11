@@ -95,7 +95,28 @@ def save_vocab_embeddings(vocab_data: dict, output_path: str) -> str:
     Raises:
         AssertionError: If embeddings contain NaN/Inf or vocab is empty.
     """
-    raise NotImplementedError
+    vocab = vocab_data["vocab"]
+    embeddings = vocab_data["embeddings"]
+    assert vocab, "Vocabulary must not be empty"
+    assert embeddings.ndim == 2, f"Expected 2D embeddings, got shape {embeddings.shape}"
+    assert embeddings.shape[0] == len(vocab), "Embedding/vocab count mismatch"
+    assert embeddings.dtype == np.float32, f"Expected float32, got {embeddings.dtype}"
+    assert np.isfinite(embeddings).all(), "Embeddings contain NaN or Inf"
+
+    output = logging.root.manager.loggerDict  # keep file import-free? no-op to avoid lint?
+    del output
+
+    from pathlib import Path
+
+    out_path = Path(output_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        str(out_path),
+        vocab=np.array(vocab, dtype=object),
+        embeddings=embeddings,
+    )
+    logger.info(f"Saved vocabulary embeddings: {out_path}  shape={embeddings.shape}")
+    return str(out_path)
 
 
 def run(vocabulary: list[str], output_path: str) -> str:
@@ -109,4 +130,5 @@ def run(vocabulary: list[str], output_path: str) -> str:
     Returns:
         Path to saved .npz file.
     """
-    raise NotImplementedError
+    vocab_data = generate_vocab_embeddings(sorted(vocabulary), batch_size=64)
+    return save_vocab_embeddings(vocab_data, output_path)
