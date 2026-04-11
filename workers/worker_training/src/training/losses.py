@@ -90,7 +90,7 @@ class CrossModalAlignmentLoss(nn.Module):
 
     def __init__(self, temperature_init: float = 0.07):
         super().__init__()
-        raise NotImplementedError
+        self.contrastive = ContrastiveLoss(temperature_init=temperature_init)
 
     def forward(
         self,
@@ -107,7 +107,12 @@ class CrossModalAlignmentLoss(nn.Module):
         Returns:
             Scalar loss, or torch.tensor(0.0, requires_grad=True) if < 2 matched samples.
         """
-        raise NotImplementedError
+        n_matched = shared_label_mask.sum().item()
+        if n_matched < 2:
+            return torch.tensor(0.0, requires_grad=True)
+        a = emb_a[shared_label_mask]
+        b = emb_b[shared_label_mask]
+        return self.contrastive(a, b)
 
 
 class GradientReversalFunction(torch.autograd.Function):
