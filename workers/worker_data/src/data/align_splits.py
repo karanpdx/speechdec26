@@ -92,7 +92,25 @@ def verify_split_integrity(splits: dict, val_subjects: list[str], test_subjects:
     Raises:
         AssertionError: If any subject appears in more than one split.
     """
-    raise NotImplementedError
+    # Collect all filenames across modalities in train split
+    train_files = []
+    for modality_files in splits.get("train", {}).values():
+        train_files.extend(modality_files)
+
+    # Extract subject IDs from train filenames (prefix before first '_')
+    train_subjects = set()
+    for fname in train_files:
+        stem = Path(fname).name
+        train_subjects.add(stem.split("_")[0])
+
+    val_set = set(val_subjects)
+    test_set = set(test_subjects)
+
+    val_leakage = val_set & train_subjects
+    assert not val_leakage, f"Val subjects found in train split: {val_leakage}"
+
+    test_leakage = test_set & train_subjects
+    assert not test_leakage, f"Test subjects found in train split: {test_leakage}"
 
 
 def print_split_statistics(splits: dict, vocabulary: list[str]) -> None:

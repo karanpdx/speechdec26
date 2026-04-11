@@ -25,7 +25,11 @@ def load_bert():
     Returns:
         Tuple of (tokenizer, model) — HuggingFace AutoTokenizer and AutoModel.
     """
-    raise NotImplementedError
+    from transformers import AutoModel, AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    model = AutoModel.from_pretrained("bert-base-uncased")
+    model.eval()
+    return tokenizer, model
 
 
 def get_bert_embedding(word: str, tokenizer, model) -> np.ndarray:
@@ -40,7 +44,11 @@ def get_bert_embedding(word: str, tokenizer, model) -> np.ndarray:
     Returns:
         float32 array of shape (768,).
     """
-    raise NotImplementedError
+    import torch
+    inputs = tokenizer(word, return_tensors="pt")
+    with torch.no_grad():
+        outputs = model(**inputs)
+    return outputs.last_hidden_state[0, 0, :].numpy().astype(np.float32)
 
 
 def generate_vocab_embeddings(vocabulary: list[str], batch_size: int = 64) -> dict:
@@ -56,7 +64,19 @@ def generate_vocab_embeddings(vocabulary: list[str], batch_size: int = 64) -> di
     Returns:
         Dict with keys 'vocab' (list[str]) and 'embeddings' (float32 (V, 768)).
     """
-    raise NotImplementedError
+    import torch
+    tokenizer, model = load_bert()
+    embeddings = []
+    for i in range(0, len(vocabulary), batch_size):
+        batch = vocabulary[i:i + batch_size]
+        inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True)
+        with torch.no_grad():
+            outputs = model(**inputs)
+        cls_embeddings = outputs.last_hidden_state[:, 0, :].numpy().astype(np.float32)
+        embeddings.append(cls_embeddings)
+        if (i + batch_size) % 100 == 0 or i == 0:
+            logger.info(f"Generated embeddings for {min(i + batch_size, len(vocabulary))}/{len(vocabulary)} words")
+    return {"vocab": vocabulary, "embeddings": np.vstack(embeddings).astype(np.float32)}
 
 
 def save_vocab_embeddings(vocab_data: dict, output_path: str) -> str:
