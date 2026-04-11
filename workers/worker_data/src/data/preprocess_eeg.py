@@ -87,7 +87,10 @@ def normalize(epochs_data: np.ndarray) -> np.ndarray:
     Returns:
         Normalized float32 array, same shape.
     """
-    raise NotImplementedError
+    # Compute mean and std across epoch (axis 0) and time (axis 2) per channel
+    mean = epochs_data.mean(axis=(0, 2), keepdims=True)
+    std = epochs_data.std(axis=(0, 2), keepdims=True)
+    return ((epochs_data - mean) / (std + 1e-8)).astype(np.float32)
 
 
 def save_epochs(

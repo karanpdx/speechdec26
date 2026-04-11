@@ -23,17 +23,14 @@ class MultiModalDataset(Dataset):
 
     Each item is a dict:
         {
-            'modality':    str — 'eeg', 'meg', or 'fmri'
-            'data':        Tensor — (n_channels, n_timepoints) or (n_voxels,)
-            'label':       str — word string
-            'label_idx':   int — index into vocabulary
-            'bert_emb':    Tensor — (768,) BERT embedding for this word
+            'modality':    str
+            'data':        Tensor
+            'label':       str
+            'label_idx':   int
+            'bert_emb':    Tensor
             'subject_id':  str
-            'subject_idx': int — index for SubjectEmbedding lookup
+            'subject_idx': int
         }
-
-    Batches contain samples from all available modalities, roughly balanced.
-    Missing modalities for a given batch do not cause errors.
     """
 
     def __init__(
@@ -42,68 +39,106 @@ class MultiModalDataset(Dataset):
         vocab_embeddings_path: str,
         processed_base_dir: str,
         split: str = "train",
-        modalities: list[str] = ("eeg", "meg", "fmri"),
+        modalities: list = ("eeg", "meg", "fmri"),
     ):
-        """
-        Args:
-            split_json_path: Path to data/splits/split_v1.json.
-            vocab_embeddings_path: Path to data/processed/vocab_embeddings.npz.
-            processed_base_dir: Base directory containing modality subdirs.
-            split: One of 'train', 'val', 'test'.
-            modalities: Which modalities to include.
-        """
-        raise NotImplementedError
+        self.modalities = list(modalities)
+        self.split = split
 
-    def __len__(self) -> int:
-        raise NotImplementedError
+        with open(split_json_path, "r") as f:
+            split_data = json.load(f)
 
-    def __getitem__(self, idx: int) -> dict:
-        raise NotImplementedError
+        split_entry = split_data[split]
 
-    def get_subject_ids(self) -> list[str]:
-        """Return sorted list of all subject IDs in this split."""
-        raise NotImplementedError
+        vocab_npz = np.load(vocab_embeddings_path, allow_pickle=False)
+        self.vocab = [str(w) for w in vocab_npz["vocab"]]
+        self.bert_matrix = vocab_npz["embeddings"].astype(np.float32)
+        self.word2idx = {w: i for i, w in enumerate(self.vocab)}
 
-    def get_vocabulary(self) -> list[str]:
-        """Return the full vocabulary list."""
-        raise NotImplementedError
+        self._index = []
+        unique_subjects = set()
 
-    def get_bert_embeddings(self) -> np.ndarray:
-        """Return (V, 768) BERT embedding matrix for the full vocabulary."""
-        raise NotImplementedError
+        for modality in [m for m in split_entry if m in self.modalities]:
+            for filename in split_entry[modality]:
+                path = Path(processed_base_dir) / modality / filename
+                if not path.exists():
+                    logger.warning("Missing file, skipping: %s", path)
+                    continue
+                npz = np.load(str(path), allow_pickle=False)
+                n_rows = len(npz["labels"])
+                subject_id = str(npz["subject_id"])
+                unique_subjects.add(subject_id)
+                for row_i in range(n_rows):
+                    self._index.append((modality, path, row_i))
 
+        self.subject2idx = {s: i for i, s in enumerate(sorted(unique_subjects))}
 
-def build_shared_label_mask(batch: list[dict]) -> torch.Tensor:
-    """
-    Build a boolean mask for CrossModalAlignmentLoss.
+    def __len__(self):
+        return len(self._index)
 
-    A sample gets True if the same word label appears in at least
-    one other sample from a different modality in this batch.
+    def __getitem__(self, idx):
+        modality, filepath, row_i = self._index[idx]
+        npz = np.load(str(filepath), allow_pickle=False)
 
-    Args:
-        batch: List of item dicts from MultiModalDataset.
+        data = npz["data"][row_i].astype(np.float32)
+        label = str(npz["labels"][row_i])
+        subject_id = str(npz["subject_id"])
 
-    Returns:
-        (batch_size,) bool tensor.
-    """
-    raise NotImplementedError
+        label_idx = self.word2idx.get(label)
+        if label_idx is None:
+            label_idx = 0
 
+        bert_emb = torch.from_numpy(self.bert_matrix[label_idx].copy())
 
-def collate_fn(batch: list[dict]) -> dict:
-    """
-    Custom collate function for MultiModalDataset.
-
-    Groups samples by modality and stacks tensors.
-
-    Returns:
-        Dict with keys per modality:
-        {
-            'eeg': {'data': Tensor, 'label_idx': Tensor, 'bert_emb': Tensor,
-                    'subject_idx': Tensor, 'labels': list[str]},
-            'meg': { ... },
-            'fmri': { ... },
-            'shared_label_mask': BoolTensor (batch_size,)
+        return {
+            "modality": modality,
+            "data": torch.from_numpy(data),
+            "label": label,
+            "label_idx": int(label_idx),
+            "bert_emb": bert_emb,
+            "subject_id": subject_id,
+            "subject_idx": int(self.subject2idx[subject_id]),
         }
-        Modalities with no samples in this batch are absent from the dict.
-    """
-    raise NotImplementedError
+
+    def get_subject_ids(self):
+        return sorted(self.subject2idx.keys())
+
+    def get_vocabulary(self):
+        return self.vocab
+
+    def get_bert_embeddings(self):
+        return self.bert_matrix
+
+
+def build_shared_label_mask(batch):
+    label_to_modalities = {}
+    for sample in batch:
+        label = sample["label"]
+        modality = sample["modality"]
+        if label not in label_to_modalities:
+            label_to_modalities[label] = set()
+        label_to_modalities[label].add(modality)
+
+    mask = [len(label_to_modalities[sample["label"]]) > 1 for sample in batch]
+    return torch.tensor(mask, dtype=torch.bool)
+
+
+def collate_fn(batch):
+    groups = {}
+    for item in batch:
+        modality = item["modality"]
+        if modality not in groups:
+            groups[modality] = []
+        groups[modality].append(item)
+
+    result = {}
+    for modality, items in groups.items():
+        result[modality] = {
+            "data": torch.stack([item["data"] for item in items]),
+            "label_idx": torch.tensor([item["label_idx"] for item in items], dtype=torch.long),
+            "bert_emb": torch.stack([item["bert_emb"] for item in items]),
+            "subject_idx": torch.tensor([item["subject_idx"] for item in items], dtype=torch.long),
+            "labels": [item["label"] for item in items],
+        }
+
+    result["shared_label_mask"] = build_shared_label_mask(batch)
+    return result

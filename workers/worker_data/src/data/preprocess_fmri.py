@@ -130,7 +130,18 @@ def apply_pca(data: np.ndarray, n_components: int, fit: bool = True, pca=None):
     Returns:
         Tuple of (projected float32 (n_words, n_components), sklearn PCA object).
     """
-    raise NotImplementedError
+    from sklearn.decomposition import PCA
+    if fit:
+        actual = min(n_components, min(data.shape[0], data.shape[1]))
+        pca = PCA(n_components=actual)
+        projected = pca.fit_transform(data)
+    else:
+        projected = pca.transform(data)
+    # Pad with zeros if actual components < requested (e.g. n_samples < n_components)
+    if projected.shape[1] < n_components:
+        pad = np.zeros((projected.shape[0], n_components - projected.shape[1]), dtype=np.float32)
+        projected = np.hstack([projected, pad])
+    return projected.astype(np.float32), pca
 
 
 def get_voxel_mni_coords(mask_img) -> np.ndarray:

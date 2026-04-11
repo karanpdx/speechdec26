@@ -412,4 +412,104 @@ def train(config_path: str) -> None:
     Args:
         config_path: Path to configs/train_stage1.yaml.
     """
-    raise NotImplementedError
+    import yaml
+    from torch.utils.data import DataLoader
+    from src.training.dataset import MultiModalDataset, collate_fn
+
+    # Load config
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    device = config.get("device", "cpu")
+    config["device"] = device
+
+    # Build models and optimizer
+    models = build_models(config)
+    optimizer = build_optimizer(models, config)
+
+    # Build DataLoaders
+    train_dataset = MultiModalDataset(
+        split_json_path=config["split_file"],
+        vocab_embeddings_path=config["vocab_embeddings"],
+        processed_base_dir=config.get("processed_base_dir", "data/processed"),
+        split="train",
+        modalities=config.get("modalities", ["eeg", "meg", "fmri"]),
+    )
+    val_dataset = MultiModalDataset(
+        split_json_path=config["split_file"],
+        vocab_embeddings_path=config["vocab_embeddings"],
+        processed_base_dir=config.get("processed_base_dir", "data/processed"),
+        split="val",
+        modalities=config.get("modalities", ["eeg", "meg", "fmri"]),
+    )
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config.get("batch_size", 64),
+        shuffle=True,
+        collate_fn=collate_fn,
+        drop_last=True,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config.get("batch_size", 64),
+        shuffle=False,
+        collate_fn=collate_fn,
+        drop_last=False,
+    )
+
+    vocab = train_dataset.get_vocabulary()
+    vocab_embeddings = train_dataset.get_bert_embeddings()
+
+    # Set up CSV logging
+    checkpoint_dir = config.get("checkpoint_dir", "checkpoints/stage1/")
+    Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
+    log_path = Path(checkpoint_dir) / "train_log.csv"
+    csv_fieldnames = ["epoch", "step", "total_loss", "eeg_loss", "meg_loss", "fmri_loss", "adversarial_loss"]
+
+    n_epochs = int(config.get("n_epochs", 50))
+    val_every = int(config.get("val_every_n_epochs", 5))
+
+    best_val_acc = -1.0
+
+    with open(log_path, "w", newline="") as csv_file:
+        csv_writer = csv.DictWriter(csv_file, fieldnames=csv_fieldnames)
+        csv_writer.writeheader()
+
+        for epoch in range(n_epochs):
+            logger.info("Epoch %d/%d", epoch + 1, n_epochs)
+
+            epoch_losses = train_one_epoch(
+                models=models,
+                dataloader=train_loader,
+                optimizer=optimizer,
+                config=config,
+                epoch=epoch,
+                csv_writer=csv_writer,
+            )
+            csv_file.flush()
+            logger.info("Epoch %d losses: %s", epoch, epoch_losses)
+
+            # Validation
+            val_metrics = {}
+            if (epoch + 1) % val_every == 0 or epoch == n_epochs - 1:
+                val_metrics = validate(models, val_loader, vocab_embeddings, vocab)
+                logger.info("Epoch %d val metrics: %s", epoch, val_metrics)
+
+            # Determine if best checkpoint
+            current_acc = max(val_metrics.values()) if val_metrics else -1.0
+            is_best = current_acc > best_val_acc
+            if is_best:
+                best_val_acc = current_acc
+
+            # Save periodic checkpoint (every 10 epochs) and best checkpoint
+            if (epoch + 1) % 10 == 0 or is_best or epoch == n_epochs - 1:
+                save_checkpoint(
+                    models=models,
+                    optimizer=optimizer,
+                    epoch=epoch,
+                    metrics={**epoch_losses, **val_metrics},
+                    checkpoint_dir=checkpoint_dir,
+                    is_best=is_best,
+                )
+
+    logger.info("Stage 1 training complete. Best val acc: %.4f", best_val_acc)
