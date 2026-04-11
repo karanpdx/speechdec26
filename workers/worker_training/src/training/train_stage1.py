@@ -160,7 +160,119 @@ def train_one_epoch(
     Returns:
         Dict of mean epoch losses: total, eeg, meg, fmri, cross_modal, adversarial.
     """
-    raise NotImplementedError
+    from src.training.losses import ContrastiveLoss, CrossModalAlignmentLoss
+
+    device = torch.device(config.get("device", "cpu"))
+    alpha = compute_alpha(epoch, config["n_epochs"])
+    lambda_cm = float(config.get("lambda_cross_modal", 0.1))
+    lambda_adv = float(config.get("lambda_subject_adversarial", 0.1))
+    log_every = int(config.get("log_every_n_steps", 10))
+
+    # Set all models to train mode
+    for m in models.values():
+        m.train()
+
+    # Local loss objects (one ContrastiveLoss per modality)
+    contrastive_losses = {
+        mod: ContrastiveLoss().to(device)
+        for mod in ("eeg", "meg", "fmri")
+    }
+    cross_modal_loss_fn = CrossModalAlignmentLoss().to(device)
+
+    # Collect all trainable parameters for gradient clipping
+    all_params = []
+    for key in ("eeg_encoder", "meg_encoder", "fmri_encoder", "projector", "subject_emb", "adversarial_loss"):
+        all_params += list(models[key].parameters())
+
+    running = {"total": 0.0, "eeg": 0.0, "meg": 0.0, "fmri": 0.0,
+               "cross_modal": 0.0, "adversarial": 0.0}
+    n_steps = 0
+
+    for step, batch in enumerate(dataloader):
+        optimizer.zero_grad()
+
+        # --- Per-modality contrastive losses ---
+        modal_embs = {}
+        modal_losses = {"eeg": 0.0, "meg": 0.0, "fmri": 0.0}
+        contrastive_total = torch.tensor(0.0, device=device)
+
+        for modality in ("eeg", "meg", "fmri"):
+            if modality not in batch:
+                continue  # S1-01: skip absent modalities
+            modal_data = batch[modality]
+            data = modal_data["data"].to(device)
+            bert_emb = modal_data["bert_emb"].to(device)
+
+            # Encode neural signal
+            if modality == "eeg":
+                neural_emb = models["eeg_encoder"](data)
+            elif modality == "meg":
+                neural_emb = models["meg_encoder"](data)
+            else:
+                neural_emb = models["fmri_encoder"](data)
+
+            # Project text embedding
+            text_emb = models["projector"](bert_emb)
+            modal_embs[modality] = neural_emb
+
+            # ContrastiveLoss — skip if batch size is 1 (raises ValueError)
+            if neural_emb.shape[0] > 1:
+                c_loss = contrastive_losses[modality](neural_emb, text_emb)
+                contrastive_total = contrastive_total + c_loss
+                modal_losses[modality] = c_loss.item()
+
+        # --- CrossModalAlignmentLoss (only when >=2 modalities present) ---
+        cm_loss = torch.tensor(0.0, device=device)
+        present_modalities = list(modal_embs.keys())
+        if len(present_modalities) >= 2:
+            m_a, m_b = present_modalities[0], present_modalities[1]
+            emb_a = modal_embs[m_a]
+            emb_b = modal_embs[m_b]
+            min_b = min(emb_a.shape[0], emb_b.shape[0])
+            if min_b >= 2:
+                shared_mask = batch["shared_label_mask"][:min_b].to(device)
+                cm_loss = cross_modal_loss_fn(emb_a[:min_b], emb_b[:min_b], shared_mask)
+
+        # --- SubjectAdversarialLoss ---
+        adv_loss = torch.tensor(0.0, device=device)
+        if present_modalities:
+            first_modal = present_modalities[0]
+            shared_emb = modal_embs[first_modal]
+            subject_ids = batch[first_modal]["subject_idx"].to(device)
+            adv_loss = models["adversarial_loss"](shared_emb, subject_ids, alpha=alpha)
+
+        # --- Total loss (S1-02) ---
+        total_loss = contrastive_total + lambda_cm * cm_loss + lambda_adv * adv_loss
+
+        # --- Backward + gradient clip + step (S1-04) ---
+        total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
+        optimizer.step()
+
+        # --- Accumulate running averages ---
+        running["total"] += total_loss.item()
+        running["eeg"] += modal_losses["eeg"]
+        running["meg"] += modal_losses["meg"]
+        running["fmri"] += modal_losses["fmri"]
+        running["cross_modal"] += cm_loss.item()
+        running["adversarial"] += adv_loss.item()
+        n_steps += 1
+
+        # --- CSV logging (S1-05) ---
+        if step % log_every == 0 and csv_writer is not None:
+            csv_writer.writerow({
+                "epoch": epoch,
+                "step": step,
+                "total_loss": total_loss.item(),
+                "eeg_loss": modal_losses["eeg"],
+                "meg_loss": modal_losses["meg"],
+                "fmri_loss": modal_losses["fmri"],
+                "adversarial_loss": adv_loss.item(),
+            })
+
+    # Return mean losses over epoch
+    denom = max(n_steps, 1)
+    return {k: v / denom for k, v in running.items()}
 
 
 def validate(models: dict, val_dataloader, vocab_embeddings, vocab: list[str]) -> dict:

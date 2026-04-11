@@ -42,7 +42,11 @@ class ContrastiveLoss(nn.Module):
             learnable_temp: If True, temperature is an nn.Parameter.
         """
         super().__init__()
-        raise NotImplementedError
+        log_temp = torch.tensor(temperature_init).log()
+        if learnable_temp:
+            self.log_temperature = nn.Parameter(log_temp)
+        else:
+            self.register_buffer("log_temperature", log_temp)
 
     def forward(self, neural_emb: Tensor, text_emb: Tensor) -> Tensor:
         """
@@ -56,7 +60,28 @@ class ContrastiveLoss(nn.Module):
         Raises:
             ValueError: If batch size == 1.
         """
-        raise NotImplementedError
+        batch_size = neural_emb.shape[0]
+        if batch_size == 1:
+            raise ValueError("ContrastiveLoss requires batch_size > 1")
+
+        # Clamp log temperature and get scale
+        log_temp = self.log_temperature.clamp(
+            torch.tensor(0.01).log().item(),
+            torch.tensor(100.0).log().item(),
+        )
+        scale = log_temp.exp()
+
+        # L2 normalize
+        n = F.normalize(neural_emb, dim=-1)
+        t = F.normalize(text_emb, dim=-1)
+
+        # Similarity matrix (B, B)
+        logits = (n @ t.T) / scale
+
+        labels = torch.arange(batch_size, device=neural_emb.device)
+        loss_n2t = F.cross_entropy(logits, labels)
+        loss_t2n = F.cross_entropy(logits.T, labels)
+        return (loss_n2t + loss_t2n) / 2.0
 
 
 class CrossModalAlignmentLoss(nn.Module):
@@ -77,7 +102,8 @@ class CrossModalAlignmentLoss(nn.Module):
 
     def __init__(self, temperature_init: float = 0.07):
         super().__init__()
-        raise NotImplementedError
+        log_temp = torch.tensor(temperature_init).log()
+        self.log_temperature = nn.Parameter(log_temp)
 
     def forward(
         self,
@@ -94,7 +120,24 @@ class CrossModalAlignmentLoss(nn.Module):
         Returns:
             Scalar loss, or torch.tensor(0.0, requires_grad=True) if < 2 matched samples.
         """
-        raise NotImplementedError
+        mask = shared_label_mask.bool()
+        a = emb_a[mask]
+        b = emb_b[mask]
+        if a.shape[0] < 2:
+            return torch.tensor(0.0, device=emb_a.device, requires_grad=True)
+
+        scale = self.log_temperature.clamp(
+            torch.tensor(0.01).log().item(),
+            torch.tensor(100.0).log().item(),
+        ).exp()
+
+        a = F.normalize(a, dim=-1)
+        b = F.normalize(b, dim=-1)
+        logits = (a @ b.T) / scale
+        labels = torch.arange(a.shape[0], device=emb_a.device)
+        loss_ab = F.cross_entropy(logits, labels)
+        loss_ba = F.cross_entropy(logits.T, labels)
+        return (loss_ab + loss_ba) / 2.0
 
 
 class GradientReversalFunction(torch.autograd.Function):
