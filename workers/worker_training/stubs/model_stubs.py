@@ -28,9 +28,7 @@ class EEGEncoder(nn.Module):
         self._dummy = nn.Linear(1, 1)  # so optimizer has params
 
     def forward(self, x: Tensor) -> Tensor:
-        # Return small random noise instead of zeros — zero vectors cause
-        # degenerate (but not NaN) ContrastiveLoss outputs due to F.normalize(0).
-        return torch.randn(x.shape[0], self.embed_dim, device=x.device) * 0.1
+        return torch.zeros(x.shape[0], self.embed_dim, device=x.device)
 
 
 class MEGEncoder(nn.Module):
@@ -41,7 +39,7 @@ class MEGEncoder(nn.Module):
         self._dummy = nn.Linear(1, 1)
 
     def forward(self, x: Tensor) -> Tensor:
-        return torch.randn(x.shape[0], self.embed_dim, device=x.device) * 0.1
+        return torch.zeros(x.shape[0], self.embed_dim, device=x.device)
 
 
 class fMRIEncoder(nn.Module):
@@ -52,7 +50,7 @@ class fMRIEncoder(nn.Module):
         self._dummy = nn.Linear(1, 1)
 
     def forward(self, x: Tensor) -> Tensor:
-        return torch.randn(x.shape[0], self.embed_dim, device=x.device) * 0.1
+        return torch.zeros(x.shape[0], self.embed_dim, device=x.device)
 
 
 class SharedEmbeddingProjector(nn.Module):
@@ -63,7 +61,7 @@ class SharedEmbeddingProjector(nn.Module):
         self._dummy = nn.Linear(1, 1)
 
     def forward(self, x: Tensor) -> Tensor:
-        return torch.randn(x.shape[0], self.embed_dim, device=x.device) * 0.1
+        return torch.zeros(x.shape[0], self.embed_dim, device=x.device)
 
 
 class SubjectEmbedding(nn.Module):

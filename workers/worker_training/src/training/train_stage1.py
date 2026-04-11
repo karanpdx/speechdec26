@@ -31,7 +31,59 @@ def build_models(config: dict) -> dict:
         Dict with keys: 'eeg_encoder', 'meg_encoder', 'fmri_encoder',
         'projector', 'subject_emb', 'adversarial_loss'.
     """
-    raise NotImplementedError
+    try:
+        from src.models.encoders import EEGEncoder, MEGEncoder, fMRIEncoder
+        from src.models.projector import SharedEmbeddingProjector
+        from src.models.subject import SubjectEmbedding
+        logger.info("build_models: using src.models encoders")
+    except ImportError:
+        logger.warning("build_models: src.models not available — using stubs/model_stubs.py")
+        from stubs.model_stubs import (
+            EEGEncoder, MEGEncoder, fMRIEncoder,
+            SharedEmbeddingProjector, SubjectEmbedding,
+        )
+
+    n_subjects = config.get("n_subjects") or 20
+
+    eeg_encoder = EEGEncoder(
+        n_channels=config["eeg_channels"],
+        n_timepoints=config["eeg_timepoints"],
+        embed_dim=config["embed_dim"],
+    )
+    meg_encoder = MEGEncoder(
+        n_channels=config["meg_channels"],
+        n_timepoints=config["meg_timepoints"],
+        embed_dim=config["embed_dim"],
+    )
+    fmri_encoder = fMRIEncoder(
+        n_voxels=config["fmri_voxels"],
+        embed_dim=config["embed_dim"],
+    )
+    projector = SharedEmbeddingProjector(
+        bert_dim=768,
+        embed_dim=config["embed_dim"],
+    )
+    subject_emb = SubjectEmbedding(
+        n_subjects=n_subjects,
+        subject_embed_dim=config["subject_embed_dim"],
+    )
+
+    from src.training.losses import SubjectAdversarialLoss
+    adversarial_loss = SubjectAdversarialLoss(
+        embed_dim=config["embed_dim"],
+        n_subjects=n_subjects,
+    )
+
+    device = torch.device(config.get("device", "cpu"))
+    models = {
+        "eeg_encoder": eeg_encoder.to(device),
+        "meg_encoder": meg_encoder.to(device),
+        "fmri_encoder": fmri_encoder.to(device),
+        "projector": projector.to(device),
+        "subject_emb": subject_emb.to(device),
+        "adversarial_loss": adversarial_loss.to(device),
+    }
+    return models
 
 
 def build_optimizer(models: dict, config: dict) -> torch.optim.Optimizer:
@@ -61,7 +113,9 @@ def compute_alpha(current_epoch: int, total_epochs: int) -> float:
     Returns:
         float in [0, 1].
     """
-    raise NotImplementedError
+    if total_epochs <= 1:
+        return 1.0
+    return current_epoch / (total_epochs - 1)
 
 
 def train_one_epoch(

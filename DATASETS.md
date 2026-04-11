@@ -1,34 +1,37 @@
 # Datasets
 
-## MEG — MASC-MEG (Primary)
-- Source: osf.io/ag3kj
-- Subjects: 27 English speakers, 2 sessions each
-- Content: 2 hours naturalistic story listening, word+phoneme labels
-- Location: ag3kj/osfstorage/
-- Status: Downloading .fif files now
-
-## EEG + fMRI — Inner Speech (ds006033)
+## EEG + fMRI — Inner Speech (ds006033) ✅ PRIMARY
 - Source: openneuro.org/datasets/ds006033
-- Content: Simultaneous EEG + fMRI during inner speech
+- Size: 7.3GB
+- Content: Simultaneous EEG + fMRI during inner speech task
 - Location: data/eeg_fmri_innerspeech/
-- Status: Downloading
+- Files: .nii.gz (fMRI), .eeg (EEG)
+- Why: Only public dataset with simultaneous EEG+fMRI during inner speech
 
-## EEG — ZuCo 2.0 (ds002791)
+## EEG — ZuCo 2.0 (ds002791) ✅ SECONDARY
 - Source: openneuro.org/datasets/ds002791
-- Subjects: 18 participants, 739 Wikipedia sentences
-- Content: EEG during natural reading
+- Size: 10GB
+- Content: EEG during natural reading, 18 subjects, 739 sentences
 - Location: data/eeg_zuco/
-- Status: Downloading
+- Files: .eeg, .vhdr, .vmrk
+- Status: Mostly complete, retrying timed-out files
 
-## fMRI — Huth Dataset (ds003020)
+## fMRI — Huth Dataset (ds003020) ✅ SECONDARY
 - Source: openneuro.org/datasets/ds003020
-- Subjects: 8 participants, 27 narrative stories
-- Content: fMRI during natural speech listening
+- Size: 9.5GB
+- Content: fMRI during naturalistic story listening, 8 subjects
 - Location: data/fmri_huth/
-- Status: Downloading
+- Files: .nii.gz
+- Why: Most cited fMRI narrative language dataset
 
-## EEG — EEGMMIDB (Baseline)
+## MEG — MASC-MEG ✅ COMPLETE
+- Size: 18GB
+- Subjects: sub-01, sub-02, sub-05, sub-07, sub-08 (5 subjects, 2 sessions each)
+- File format: .con (KIT/Yokogawa system) — use mne.io.read_raw_kit()
+- Location: ag3kj/osfstorage/
+
+## EEG — EEGMMIDB ✅ BASELINE
 - Source: physionet.org/content/eegmmidb/1.0.0/
-- Content: Motor imagery EEG, S001 and S002 downloaded
+- Size: 79MB
+- Content: Motor imagery EEG, S001+S002
 - Location: data/eeg/eegmmidb/
-- Status: S001 + S002 complete
