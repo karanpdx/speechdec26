@@ -97,7 +97,16 @@ def build_optimizer(models: dict, config: dict) -> torch.optim.Optimizer:
     Returns:
         torch.optim.AdamW optimizer.
     """
-    raise NotImplementedError
+    params = []
+    for key in ("eeg_encoder", "meg_encoder", "fmri_encoder", "projector", "subject_emb"):
+        params += list(models[key].parameters())
+    # adversarial_loss has its own internal classifier — include it too
+    params += list(models["adversarial_loss"].parameters())
+    return torch.optim.AdamW(
+        params,
+        lr=float(config.get("lr", 3e-4)),
+        weight_decay=float(config.get("weight_decay", 1e-4)),
+    )
 
 
 def compute_alpha(current_epoch: int, total_epochs: int) -> float:
