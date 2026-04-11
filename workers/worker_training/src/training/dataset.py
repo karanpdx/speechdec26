@@ -52,25 +52,104 @@ class MultiModalDataset(Dataset):
             split: One of 'train', 'val', 'test'.
             modalities: Which modalities to include.
         """
-        raise NotImplementedError
+        self.modalities = list(modalities)
+        self.split = split
+
+        # Load split JSON
+        with open(split_json_path, "r") as f:
+            split_data = json.load(f)
+
+        split_entry = split_data[split]  # {modality: [filename, ...]}
+
+        # Load vocabulary and BERT embeddings — allow_pickle=False prevents
+        # deserialization of arbitrary objects from untrusted .npz files.
+        vocab_npz = np.load(vocab_embeddings_path, allow_pickle=False)
+        self.vocab: list[str] = [str(w) for w in vocab_npz["vocab"]]
+        self.bert_matrix: np.ndarray = vocab_npz["embeddings"].astype(np.float32)
+        self.word2idx: dict[str, int] = {w: i for i, w in enumerate(self.vocab)}
+        logger.info(
+            "Loaded vocabulary: %d words, bert_matrix shape: %s",
+            len(self.vocab),
+            self.bert_matrix.shape,
+        )
+
+        # Build flat index: list of (modality, filepath, row_i)
+        # Data arrays are NOT loaded into RAM here — lazy loading happens in __getitem__.
+        self._index: list[tuple[str, Path, int]] = []
+        unique_subjects: set[str] = set()
+
+        for modality in [m for m in split_entry if m in self.modalities]:
+            for filename in split_entry[modality]:
+                path = Path(processed_base_dir) / modality / filename
+                if not path.exists():
+                    logger.warning("Missing file, skipping: %s", path)
+                    continue
+                # Open briefly to count rows and collect subject_id; no data retained.
+                npz = np.load(str(path), allow_pickle=False)
+                n_rows = len(npz["labels"])
+                subject_id = str(npz["subject_id"])
+                unique_subjects.add(subject_id)
+                for row_i in range(n_rows):
+                    self._index.append((modality, path, row_i))
+                logger.info(
+                    "Indexed %s/%s: %d samples (subject=%s)",
+                    modality,
+                    filename,
+                    n_rows,
+                    subject_id,
+                )
+
+        self.subject2idx: dict[str, int] = {
+            s: i for i, s in enumerate(sorted(unique_subjects))
+        }
+        logger.info(
+            "Split=%s — total samples: %d, subjects: %d, modalities: %s",
+            split,
+            len(self._index),
+            len(self.subject2idx),
+            self.modalities,
+        )
 
     def __len__(self) -> int:
-        raise NotImplementedError
+        return len(self._index)
 
     def __getitem__(self, idx: int) -> dict:
-        raise NotImplementedError
+        modality, filepath, row_i = self._index[idx]
+        # allow_pickle=False: treat .npz data arrays as untrusted filesystem input.
+        npz = np.load(str(filepath), allow_pickle=False)
+
+        data = npz["data"][row_i].astype(np.float32)
+        label = str(npz["labels"][row_i])
+        subject_id = str(npz["subject_id"])
+
+        label_idx = self.word2idx.get(label)
+        if label_idx is None:
+            logger.warning("Unknown label '%s' at index %d, mapping to index 0", label, idx)
+            label_idx = 0
+
+        bert_emb = torch.from_numpy(self.bert_matrix[label_idx].copy())
+
+        return {
+            "modality": modality,
+            "data": torch.from_numpy(data),
+            "label": label,
+            "label_idx": int(label_idx),
+            "bert_emb": bert_emb,
+            "subject_id": subject_id,
+            "subject_idx": int(self.subject2idx[subject_id]),
+        }
 
     def get_subject_ids(self) -> list[str]:
         """Return sorted list of all subject IDs in this split."""
-        raise NotImplementedError
+        return sorted(self.subject2idx.keys())
 
     def get_vocabulary(self) -> list[str]:
         """Return the full vocabulary list."""
-        raise NotImplementedError
+        return self.vocab
 
     def get_bert_embeddings(self) -> np.ndarray:
         """Return (V, 768) BERT embedding matrix for the full vocabulary."""
-        raise NotImplementedError
+        return self.bert_matrix
 
 
 def build_shared_label_mask(batch: list[dict]) -> torch.Tensor:
