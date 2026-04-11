@@ -25,10 +25,11 @@ class EEGEncoder(nn.Module):
     def __init__(self, n_channels=64, n_timepoints=175, embed_dim=768, **kwargs):
         super().__init__()
         self.embed_dim = embed_dim
-        self._dummy = nn.Linear(1, 1)  # so optimizer has params
+        self._dummy = nn.Linear(1, embed_dim)
 
     def forward(self, x: Tensor) -> Tensor:
-        return torch.randn(x.shape[0], self.embed_dim, device=x.device) * 0.1
+        pooled = x.mean(dim=(1, 2), keepdim=True)
+        return self._dummy(pooled.view(x.shape[0], 1))
 
 
 class MEGEncoder(nn.Module):
@@ -36,10 +37,11 @@ class MEGEncoder(nn.Module):
     def __init__(self, n_channels=306, n_timepoints=175, embed_dim=768, **kwargs):
         super().__init__()
         self.embed_dim = embed_dim
-        self._dummy = nn.Linear(1, 1)
+        self._dummy = nn.Linear(1, embed_dim)
 
     def forward(self, x: Tensor) -> Tensor:
-        return torch.randn(x.shape[0], self.embed_dim, device=x.device) * 0.1
+        pooled = x.mean(dim=(1, 2), keepdim=True)
+        return self._dummy(pooled.view(x.shape[0], 1))
 
 
 class fMRIEncoder(nn.Module):
@@ -47,10 +49,11 @@ class fMRIEncoder(nn.Module):
     def __init__(self, n_voxels=1000, embed_dim=768, **kwargs):
         super().__init__()
         self.embed_dim = embed_dim
-        self._dummy = nn.Linear(1, 1)
+        self._dummy = nn.Linear(1, embed_dim)
 
     def forward(self, x: Tensor) -> Tensor:
-        return torch.randn(x.shape[0], self.embed_dim, device=x.device) * 0.1
+        pooled = x.mean(dim=1, keepdim=True)
+        return self._dummy(pooled)
 
 
 class SharedEmbeddingProjector(nn.Module):
@@ -58,10 +61,10 @@ class SharedEmbeddingProjector(nn.Module):
     def __init__(self, bert_dim=768, embed_dim=768):
         super().__init__()
         self.embed_dim = embed_dim
-        self._dummy = nn.Linear(1, 1)
+        self._dummy = nn.Linear(bert_dim, embed_dim)
 
     def forward(self, x: Tensor) -> Tensor:
-        return torch.randn(x.shape[0], self.embed_dim, device=x.device) * 0.1
+        return self._dummy(x)
 
 
 class SubjectEmbedding(nn.Module):
@@ -69,13 +72,13 @@ class SubjectEmbedding(nn.Module):
     def __init__(self, n_subjects=20, subject_embed_dim=64):
         super().__init__()
         self.subject_embed_dim = subject_embed_dim
-        self._dummy = nn.Linear(1, 1)
+        self.embedding = nn.Embedding(n_subjects, subject_embed_dim)
 
     def forward(self, subject_ids: Tensor) -> Tensor:
-        return torch.zeros(subject_ids.shape[0], self.subject_embed_dim, device=subject_ids.device)
+        return self.embedding(subject_ids)
 
     def get_mean_embedding(self) -> Tensor:
-        return torch.zeros(1, self.subject_embed_dim)
+        return self.embedding.weight.mean(dim=0, keepdim=True)
 
 
 class EEGDecoder(nn.Module):
@@ -84,11 +87,13 @@ class EEGDecoder(nn.Module):
         super().__init__()
         self.n_channels = n_channels
         self.n_timepoints = n_timepoints
-        self._dummy = nn.Linear(1, 1)
+        self.channel_proj = nn.Linear(embed_dim + subject_embed_dim, n_channels)
+        self.time_basis = nn.Parameter(torch.randn(n_timepoints) * 0.02)
 
     def forward(self, shared_emb: Tensor, subject_emb: Tensor) -> Tensor:
-        return torch.zeros(shared_emb.shape[0], self.n_channels, self.n_timepoints,
-                           device=shared_emb.device)
+        fused = torch.cat([shared_emb, subject_emb], dim=-1)
+        channel_out = self.channel_proj(fused)
+        return channel_out.unsqueeze(-1) * self.time_basis.view(1, 1, self.n_timepoints)
 
 
 class MEGDecoder(nn.Module):
@@ -97,11 +102,13 @@ class MEGDecoder(nn.Module):
         super().__init__()
         self.n_channels = n_channels
         self.n_timepoints = n_timepoints
-        self._dummy = nn.Linear(1, 1)
+        self.channel_proj = nn.Linear(embed_dim + subject_embed_dim, n_channels)
+        self.time_basis = nn.Parameter(torch.randn(n_timepoints) * 0.02)
 
     def forward(self, shared_emb: Tensor, subject_emb: Tensor) -> Tensor:
-        return torch.zeros(shared_emb.shape[0], self.n_channels, self.n_timepoints,
-                           device=shared_emb.device)
+        fused = torch.cat([shared_emb, subject_emb], dim=-1)
+        channel_out = self.channel_proj(fused)
+        return channel_out.unsqueeze(-1) * self.time_basis.view(1, 1, self.n_timepoints)
 
 
 class fMRIDecoder(nn.Module):
@@ -109,7 +116,8 @@ class fMRIDecoder(nn.Module):
     def __init__(self, embed_dim=768, subject_embed_dim=64, n_voxels=1000):
         super().__init__()
         self.n_voxels = n_voxels
-        self._dummy = nn.Linear(1, 1)
+        self.proj = nn.Linear(embed_dim + subject_embed_dim, n_voxels)
 
     def forward(self, shared_emb: Tensor, subject_emb: Tensor) -> Tensor:
-        return torch.zeros(shared_emb.shape[0], self.n_voxels, device=shared_emb.device)
+        fused = torch.cat([shared_emb, subject_emb], dim=-1)
+        return self.proj(fused)

@@ -32,9 +32,13 @@ def build_models(config: dict) -> dict:
         'projector', 'subject_emb', 'adversarial_loss'.
     """
     try:
-        from src.models.encoders import EEGEncoder, MEGEncoder, fMRIEncoder
-        from src.models.projector import SharedEmbeddingProjector
-        from src.models.subject import SubjectEmbedding
+        from src.models.encoders import (
+            EEGEncoder,
+            MEGEncoder,
+            SharedEmbeddingProjector,
+            SubjectEmbedding,
+            fMRIEncoder,
+        )
         logger.info("build_models: using src.models encoders")
     except ImportError:
         logger.warning("build_models: src.models not available — using stubs/model_stubs.py")

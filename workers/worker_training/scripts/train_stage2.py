@@ -11,7 +11,10 @@ IMPORTANT: Run this ONLY after Stage 1 has converged and been validated.
 import argparse
 import logging
 import sys
+import tempfile
 from pathlib import Path
+
+import yaml
 
 
 def parse_args():
@@ -39,8 +42,21 @@ def main():
         logging.error(f"Config file not found: {config_path}")
         sys.exit(1)
 
+    final_config_path = config_path
+    if args.stage1_checkpoint is not None or args.device is not None:
+        with open(config_path, "r") as handle:
+            config = yaml.safe_load(handle)
+        if args.stage1_checkpoint is not None:
+            config["stage1_checkpoint"] = args.stage1_checkpoint
+        if args.device is not None:
+            config["device"] = args.device
+
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as handle:
+            yaml.safe_dump(config, handle)
+            final_config_path = handle.name
+
     from src.training.train_stage2 import train
-    train(config_path=config_path)
+    train(config_path=final_config_path)
 
 
 if __name__ == "__main__":

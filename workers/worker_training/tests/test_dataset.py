@@ -4,9 +4,14 @@ End-to-end tests for the dataset loader.
 Uses write_stub_dataset to generate synthetic data in a temp dir — no real data needed.
 """
 
+import sys
+from pathlib import Path
+
 import pytest
 import torch
 from torch.utils.data import DataLoader
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from stubs.data_stubs import write_stub_dataset
 from src.training.dataset import MultiModalDataset, collate_fn, build_shared_label_mask

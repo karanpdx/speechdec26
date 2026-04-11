@@ -9,7 +9,10 @@ Usage:
 import argparse
 import logging
 import sys
+import tempfile
 from pathlib import Path
+
+import yaml
 
 
 def parse_args():
@@ -35,9 +38,18 @@ def main():
         logging.error(f"Config file not found: {config_path}")
         sys.exit(1)
 
-    # Import here so errors surface cleanly
+    final_config_path = config_path
+    if args.device is not None:
+        with open(config_path, "r") as handle:
+            config = yaml.safe_load(handle)
+        config["device"] = args.device
+
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as handle:
+            yaml.safe_dump(config, handle)
+            final_config_path = handle.name
+
     from src.training.train_stage1 import train
-    train(config_path=config_path)
+    train(config_path=final_config_path)
 
 
 if __name__ == "__main__":
