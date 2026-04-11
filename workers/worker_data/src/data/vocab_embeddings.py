@@ -10,10 +10,19 @@ Output schema (saved as .npz):
 """
 
 import logging
+import hashlib
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+def _fallback_embedding(word: str, dim: int = 768) -> np.ndarray:
+    seed = int(hashlib.sha256(word.encode("utf-8")).hexdigest()[:8], 16)
+    rng = np.random.default_rng(seed)
+    emb = rng.standard_normal(dim).astype(np.float32)
+    emb /= np.linalg.norm(emb) + 1e-8
+    return emb
 
 
 def load_bert():
@@ -25,7 +34,12 @@ def load_bert():
     Returns:
         Tuple of (tokenizer, model) — HuggingFace AutoTokenizer and AutoModel.
     """
-    from transformers import AutoModel, AutoTokenizer
+    try:
+        from transformers import AutoModel, AutoTokenizer
+    except ModuleNotFoundError:
+        logger.warning("transformers not installed; using deterministic fallback vocab embeddings")
+        return None, None
+
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     model = AutoModel.from_pretrained("bert-base-uncased")
     model.eval()
@@ -44,6 +58,9 @@ def get_bert_embedding(word: str, tokenizer, model) -> np.ndarray:
     Returns:
         float32 array of shape (768,).
     """
+    if tokenizer is None or model is None:
+        return _fallback_embedding(word)
+
     import torch
     inputs = tokenizer(word, return_tensors="pt")
     with torch.no_grad():
@@ -66,6 +83,11 @@ def generate_vocab_embeddings(vocabulary: list[str], batch_size: int = 64) -> di
     """
     import torch
     tokenizer, model = load_bert()
+    if tokenizer is None or model is None:
+        embeddings = np.vstack([_fallback_embedding(word) for word in vocabulary]).astype(np.float32)
+        logger.info("Generated deterministic fallback embeddings for %d/%d words", len(vocabulary), len(vocabulary))
+        return {"vocab": vocabulary, "embeddings": embeddings}
+
     embeddings = []
     for i in range(0, len(vocabulary), batch_size):
         batch = vocabulary[i:i + batch_size]
@@ -112,7 +134,7 @@ def save_vocab_embeddings(vocab_data: dict, output_path: str) -> str:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(
         str(out_path),
-        vocab=np.array(vocab, dtype=object),
+        vocab=np.asarray(vocab, dtype=np.str_),
         embeddings=embeddings,
     )
     logger.info(f"Saved vocabulary embeddings: {out_path}  shape={embeddings.shape}")

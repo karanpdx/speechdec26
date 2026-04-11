@@ -1,0 +1,15 @@
+# fMRI Preprocessing Configuration
+
+dataset_name: null
+subjects: "all"
+
+tr: null
+hrf_model: "spm"
+smoothing_fwhm: 6.0
+high_pass: 0.01
+
+mask: null
+roi_mask: null
+n_pca_components: null
+
+output_dir: "data/processed"

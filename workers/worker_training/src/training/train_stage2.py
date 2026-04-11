@@ -486,7 +486,8 @@ def _save_checkpoint(
 
 
 def _build_adjacency_from_dataset(dataset, config: dict) -> torch.Tensor | None:
-    for modality, path, _ in getattr(dataset, "_index", []):
+    for entry in getattr(dataset, "_index", []):
+        modality, path = entry[0], entry[1]
         if modality != "fmri":
             continue
         npz = np.load(path, allow_pickle=False)

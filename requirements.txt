@@ -1,0 +1,12 @@
+numpy
+torch
+PyYAML
+transformers
+mne
+nilearn
+nibabel
+pandas
+scikit-learn
+scipy
+matplotlib
+pytest

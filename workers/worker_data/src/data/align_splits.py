@@ -12,11 +12,43 @@ Invariants (verified before saving):
 
 import json
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+_INVALID_LABELS = {"", "nan", "none", "null"}
+
+
+def _normalize_label(label) -> str | None:
+    if label is None:
+        return None
+    if isinstance(label, bytes):
+        label = label.decode("utf-8", errors="ignore")
+    if isinstance(label, np.generic):
+        label = label.item()
+    if isinstance(label, float) and np.isnan(label):
+        return None
+
+    text = str(label).strip()
+    if text.lower() in _INVALID_LABELS:
+        return None
+    return text
+
+
+def _load_valid_labels(npz_path: Path) -> list[str]:
+    with np.load(npz_path, allow_pickle=True) as data:
+        raw_labels = data["labels"].tolist()
+    return [label for raw in raw_labels if (label := _normalize_label(raw)) is not None]
+
+
+def _common_processed_root(processed_dirs: dict[str, str]) -> Path:
+    roots = [str(Path(path)) for path in processed_dirs.values() if path]
+    if not roots:
+        raise ValueError("No processed directories provided")
+    return Path(os.path.commonpath(roots))
 
 
 def build_vocabulary(processed_dirs: dict[str, str]) -> list[str]:
@@ -35,8 +67,7 @@ def build_vocabulary(processed_dirs: dict[str, str]) -> list[str]:
         if not dir_path:
             continue
         for npz_path in sorted(Path(dir_path).glob("*.npz")):
-            with np.load(npz_path, allow_pickle=True) as data:
-                vocabulary.update(str(label) for label in data["labels"].tolist())
+            vocabulary.update(_load_valid_labels(npz_path))
     return sorted(vocabulary)
 
 
@@ -46,6 +77,7 @@ def filter_vocabulary(
     train_subject_ids: list[str],
     min_word_freq: int,
     vocab_source: str,
+    target_vocab_size: int | None = None,
 ) -> list[str]:
     """
     Filter vocabulary by minimum frequency in training subjects.
@@ -71,8 +103,7 @@ def filter_vocabulary(
             subject_id = Path(npz_path).name.split("_")[0]
             if subject_id not in train_subject_ids:
                 continue
-            with np.load(npz_path, allow_pickle=True) as data:
-                labels = [str(label) for label in data["labels"].tolist()]
+            labels = _load_valid_labels(npz_path)
             for label in labels:
                 if label in freq_counts:
                     freq_counts[label] += 1
@@ -86,7 +117,15 @@ def filter_vocabulary(
         if vocab_source == "intersection" and modality_presence[word] != active_modalities:
             continue
         filtered.append(word)
-    return sorted(filtered)
+
+    ranked = sorted(filtered, key=lambda word: (-freq_counts[word], word))
+    if target_vocab_size is not None:
+        if len(ranked) < target_vocab_size:
+            raise ValueError(
+                f"Only {len(ranked)} eligible shared words found, but target_vocab_size={target_vocab_size}"
+            )
+        ranked = ranked[:target_vocab_size]
+    return ranked
 
 
 def generate_splits(
@@ -94,6 +133,7 @@ def generate_splits(
     val_subjects: list[str],
     test_subjects: list[str],
     vocabulary: list[str],
+    processed_base_dir: str | None = None,
 ) -> dict:
     """
     Generate train/val/test splits as a dict of subject file lists per modality.
@@ -110,7 +150,9 @@ def generate_splits(
                'test':  {'eeg': [...], ...}}
     """
     vocab_set = set(vocabulary)
+    base_dir = Path(processed_base_dir) if processed_base_dir is not None else _common_processed_root(processed_dirs)
     splits = {
+        "metadata": {"processed_base_dir": str(base_dir)},
         "train": {modality: [] for modality in processed_dirs if processed_dirs[modality]},
         "val": {modality: [] for modality in processed_dirs if processed_dirs[modality]},
         "test": {modality: [] for modality in processed_dirs if processed_dirs[modality]},
@@ -120,8 +162,7 @@ def generate_splits(
         if not dir_path:
             continue
         for npz_path in sorted(Path(dir_path).glob("*.npz")):
-            with np.load(npz_path, allow_pickle=True) as data:
-                labels = {str(label) for label in data["labels"].tolist()}
+            labels = set(_load_valid_labels(npz_path))
             if not (labels & vocab_set):
                 continue
 
@@ -132,7 +173,11 @@ def generate_splits(
                 split_name = "val"
             else:
                 split_name = "train"
-            splits[split_name][modality].append(str(npz_path))
+            try:
+                split_entry = str(npz_path.relative_to(base_dir))
+            except ValueError:
+                split_entry = str(npz_path)
+            splits[split_name][modality].append(split_entry)
 
     return splits
 
@@ -183,6 +228,8 @@ def print_split_statistics(splits: dict, vocabulary: list[str]) -> None:
     """
     logger.info(f"Vocabulary size: {len(vocabulary)}")
     for split_name, split_modalities in splits.items():
+        if split_name == "metadata":
+            continue
         logger.info(f"Split: {split_name}")
         for modality, files in split_modalities.items():
             subject_ids = sorted({Path(path).name.split('_')[0] for path in files})
@@ -255,6 +302,7 @@ def run_alignment(config_path: str) -> tuple[str, str]:
         train_subject_ids=train_subjects,
         min_word_freq=config.get("min_word_freq", 5),
         vocab_source=config.get("vocab_source", "intersection"),
+        target_vocab_size=config.get("target_vocab_size"),
     )
     if not vocabulary:
         raise ValueError("Filtered vocabulary is empty; cannot generate splits")
@@ -264,6 +312,7 @@ def run_alignment(config_path: str) -> tuple[str, str]:
         val_subjects=val_subjects,
         test_subjects=test_subjects,
         vocabulary=vocabulary,
+        processed_base_dir=str(_common_processed_root(processed_dirs)),
     )
     verify_split_integrity(splits, val_subjects, test_subjects)
     print_split_statistics(splits, vocabulary)

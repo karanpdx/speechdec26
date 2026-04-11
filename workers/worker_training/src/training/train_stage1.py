@@ -53,11 +53,13 @@ def build_models(config: dict) -> dict:
         n_channels=config["eeg_channels"],
         n_timepoints=config["eeg_timepoints"],
         embed_dim=config["embed_dim"],
+        share_temporal=bool(config.get("share_temporal_weights", False)),
     )
     meg_encoder = MEGEncoder(
         n_channels=config["meg_channels"],
         n_timepoints=config["meg_timepoints"],
         embed_dim=config["embed_dim"],
+        share_temporal=bool(config.get("share_temporal_weights", False)),
     )
     fmri_encoder = fMRIEncoder(
         n_voxels=config["fmri_voxels"],
@@ -77,6 +79,10 @@ def build_models(config: dict) -> dict:
         embed_dim=config["embed_dim"],
         n_subjects=n_subjects,
     )
+
+    if bool(config.get("share_temporal_weights", False)):
+        eeg_encoder.share_temporal_weights(meg_encoder)
+        logger.info("build_models: enabled EEG/MEG temporal weight sharing")
 
     device = torch.device(config.get("device", "cpu"))
     models = {

@@ -15,6 +15,47 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 logger = logging.getLogger(__name__)
+_INVALID_LABELS = {"", "nan", "none", "null"}
+
+
+def _normalize_label(label) -> Optional[str]:
+    if label is None:
+        return None
+    if isinstance(label, bytes):
+        label = label.decode("utf-8", errors="ignore")
+    if isinstance(label, np.generic):
+        label = label.item()
+    if isinstance(label, float) and np.isnan(label):
+        return None
+
+    text = str(label).strip()
+    if text.lower() in _INVALID_LABELS:
+        return None
+    return text
+
+
+def _resolve_split_entry(processed_base_dirs: list[str], modality: str, entry: str) -> Path:
+    raw_path = Path(entry)
+    candidates = []
+
+    if raw_path.is_absolute():
+        candidates.append(raw_path)
+    else:
+        for processed_base_dir in processed_base_dirs:
+            base_dir = Path(processed_base_dir)
+            candidates.extend(
+                [
+                    base_dir / raw_path,
+                    base_dir / modality / raw_path,
+                ]
+            )
+        candidates.append(raw_path)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return candidates[0]
 
 
 class MultiModalDataset(Dataset):
@@ -37,7 +78,7 @@ class MultiModalDataset(Dataset):
         self,
         split_json_path: str,
         vocab_embeddings_path: str,
-        processed_base_dir: str,
+        processed_base_dir: str | None,
         split: str = "train",
         modalities: list = ("eeg", "meg", "fmri"),
     ):
@@ -48,6 +89,13 @@ class MultiModalDataset(Dataset):
             split_data = json.load(f)
 
         split_entry = split_data[split]
+        split_metadata = split_data.get("metadata", {})
+        split_base_dir = split_metadata.get("processed_base_dir")
+        self.processed_base_dir = processed_base_dir or split_base_dir or "data/processed"
+        self._processed_base_dir_candidates = []
+        for candidate in (processed_base_dir, split_base_dir, "data/processed"):
+            if candidate and candidate not in self._processed_base_dir_candidates:
+                self._processed_base_dir_candidates.append(candidate)
 
         vocab_npz = np.load(vocab_embeddings_path, allow_pickle=False)
         self.vocab = [str(w) for w in vocab_npz["vocab"]]
@@ -58,17 +106,19 @@ class MultiModalDataset(Dataset):
         unique_subjects = set()
 
         for modality in [m for m in split_entry if m in self.modalities]:
-            for filename in split_entry[modality]:
-                path = Path(processed_base_dir) / modality / filename
+            for entry in split_entry[modality]:
+                path = _resolve_split_entry(self._processed_base_dir_candidates, modality, entry)
                 if not path.exists():
                     logger.warning("Missing file, skipping: %s", path)
                     continue
                 npz = np.load(str(path), allow_pickle=False)
-                n_rows = len(npz["labels"])
                 subject_id = str(npz["subject_id"])
                 unique_subjects.add(subject_id)
-                for row_i in range(n_rows):
-                    self._index.append((modality, path, row_i))
+                for row_i, raw_label in enumerate(npz["labels"].tolist()):
+                    label = _normalize_label(raw_label)
+                    if label is None or label not in self.word2idx:
+                        continue
+                    self._index.append((modality, path, row_i, label, self.word2idx[label]))
 
         self.subject2idx = {s: i for i, s in enumerate(sorted(unique_subjects))}
 
@@ -76,20 +126,17 @@ class MultiModalDataset(Dataset):
         return len(self._index)
 
     def __getitem__(self, idx):
-        modality, filepath, row_i = self._index[idx]
+        modality, filepath, row_i, label, label_idx = self._index[idx]
         npz = np.load(str(filepath), allow_pickle=False)
 
         data = npz["data"][row_i].astype(np.float32)
-        label = str(npz["labels"][row_i])
         subject_id = str(npz["subject_id"])
-
-        label_idx = self.word2idx.get(label)
-        if label_idx is None:
-            label_idx = 0
 
         bert_emb = torch.from_numpy(self.bert_matrix[label_idx].copy())
 
         return {
+            **({"sfreq": float(npz["sfreq"])} if "sfreq" in npz.files else {}),
+            **({"voxel_coords": npz["voxel_coords"].astype(np.int32)} if "voxel_coords" in npz.files else {}),
             "modality": modality,
             "data": torch.from_numpy(data),
             "label": label,
@@ -132,13 +179,18 @@ def collate_fn(batch):
 
     result = {}
     for modality, items in groups.items():
-        result[modality] = {
+        modal_result = {
             "data": torch.stack([item["data"] for item in items]),
             "label_idx": torch.tensor([item["label_idx"] for item in items], dtype=torch.long),
             "bert_emb": torch.stack([item["bert_emb"] for item in items]),
             "subject_idx": torch.tensor([item["subject_idx"] for item in items], dtype=torch.long),
             "labels": [item["label"] for item in items],
         }
+        if "sfreq" in items[0]:
+            modal_result["sfreq"] = float(items[0]["sfreq"])
+        if "voxel_coords" in items[0]:
+            modal_result["voxel_coords"] = items[0]["voxel_coords"]
+        result[modality] = modal_result
 
     result["shared_label_mask"] = build_shared_label_mask(batch)
     return result

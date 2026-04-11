@@ -162,7 +162,14 @@ def make_round_trip_inputs(
     noise = rng.randn(n_words, embed_dim).astype(np.float32)
     noise /= np.linalg.norm(noise, axis=1, keepdims=True)
 
-    round_trip = round_trip_similarity * original + (1 - round_trip_similarity) * noise
+    # Orthogonalize noise against the original embedding so the resulting cosine
+    # after normalization is approximately the requested round_trip_similarity.
+    projection = np.sum(noise * original, axis=1, keepdims=True) * original
+    orthogonal_noise = noise - projection
+    orthogonal_noise /= np.linalg.norm(orthogonal_noise, axis=1, keepdims=True) + 1e-8
+
+    mix = np.sqrt(max(0.0, 1.0 - round_trip_similarity ** 2))
+    round_trip = round_trip_similarity * original + mix * orthogonal_noise
     round_trip /= np.linalg.norm(round_trip, axis=1, keepdims=True)
 
     return {

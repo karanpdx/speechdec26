@@ -9,6 +9,7 @@ test_subjects: []           # e.g. ["sub-11", "sub-12"]
 # Vocabulary filtering
 min_word_freq: 5            # min occurrences across training subjects (all modalities combined)
 vocab_source: "intersection" # 'intersection': word in all modalities | 'union': word in any
+target_vocab_size: 10       # keep exactly the 10 most frequent non-null shared words
 
 # Reproducibility
 seed: 42
