@@ -13,6 +13,7 @@ Functions:
 
 import logging
 from pathlib import Path
+from collections import defaultdict
 
 import numpy as np
 
@@ -44,7 +45,45 @@ def compute_retrieval_metrics(
         Dict with keys 'top{k}' for each k in k_values, plus 'mrr'.
         Example: {'top1': 0.25, 'top5': 0.60, 'top10': 0.75, 'mrr': 0.38}
     """
-    raise NotImplementedError
+    # Normalize embeddings for cosine similarity via dot product
+    neural_norm = neural_embeddings / (np.linalg.norm(neural_embeddings, axis=1, keepdims=True) + 1e-8)
+    text_norm = text_embeddings / (np.linalg.norm(text_embeddings, axis=1, keepdims=True) + 1e-8)
+
+    # Cosine similarity matrix: (n_samples, vocab_size)
+    similarity = neural_norm @ text_norm.T
+
+    # Descending rank indices for each sample
+    ranked_indices = np.argsort(-similarity, axis=1)
+
+    vocab_index = {word: i for i, word in enumerate(vocab)}
+
+    reciprocal_ranks = []
+    hits = {k: 0 for k in k_values}
+
+    for i, label in enumerate(labels):
+        gt_idx = vocab_index.get(label)
+        if gt_idx is None:
+            continue
+
+        ranked = ranked_indices[i]
+        # np.where returns a tuple; [0][0] gives the position
+        rank_positions = np.where(ranked == gt_idx)[0]
+        if len(rank_positions) == 0:
+            reciprocal_ranks.append(0.0)
+            continue
+
+        rank = rank_positions[0] + 1  # 1-indexed
+        reciprocal_ranks.append(1.0 / rank)
+
+        for k in k_values:
+            if rank <= k:
+                hits[k] += 1
+
+    n = len(labels)
+    metrics = {f"top{k}": hits[k] / n for k in k_values}
+    metrics["mrr"] = float(np.mean(reciprocal_ranks)) if reciprocal_ranks else 0.0
+
+    return metrics
 
 
 def compute_cross_subject_generalization(
@@ -74,7 +113,34 @@ def compute_cross_subject_generalization(
             'mean': metrics dict averaged across subjects
             'std': metrics dict std across subjects
     """
-    raise NotImplementedError
+    # Group sample indices by subject
+    subject_map = defaultdict(list)
+    for i, sid in enumerate(subject_ids):
+        subject_map[sid].append(i)
+
+    per_subject = {}
+    for sid, indices in subject_map.items():
+        s_neural = neural_embeddings[np.array(indices)]
+        s_labels = [labels[i] for i in indices]
+        per_subject[sid] = compute_retrieval_metrics(
+            s_neural, text_embeddings, s_labels, vocab, k_values
+        )
+
+    # Mean and std across subjects (not pooled samples)
+    subject_metrics = list(per_subject.values())
+    all_keys = list(subject_metrics[0].keys())
+
+    mean_metrics, std_metrics = {}, {}
+    for key in all_keys:
+        vals = np.array([m[key] for m in subject_metrics])
+        mean_metrics[key] = float(vals.mean())
+        std_metrics[key] = float(vals.std())
+
+    return {
+        "per_subject": per_subject,
+        "mean": mean_metrics,
+        "std": std_metrics,
+    }
 
 
 def compute_cross_modal_alignment(
@@ -106,7 +172,46 @@ def compute_cross_modal_alignment(
             'alignment_gap':      float — matched - random (must be > 0)
             'n_matched_pairs':    int   — number of matched word pairs found
     """
-    raise NotImplementedError
+    #converts every embedding to unit length 
+    def normalize(x):
+        norms = np.linalg.norm(x, axis=1, keepdims=True) + 1e-8
+        return x / norms
+
+    eeg_norm = normalize(eeg_embeddings)
+    meg_norm = normalize(meg_embeddings)
+
+    meg_label_map = defaultdict(list)
+    for i, label in enumerate(meg_labels):
+        meg_label_map[label].append(i)
+
+    # one EEG sample and one MEG sample that share the same word label
+    matched_eeg_idx, matched_meg_idx = [], []
+    for i, label in enumerate(eeg_labels):
+        if label in meg_label_map:
+            matched_eeg_idx.append(i)
+            matched_meg_idx.append(meg_label_map[label][0])
+
+    if not matched_eeg_idx:
+        return {"matched_similarity": 0.0, "random_similarity": 0.0,
+                "alignment_gap": 0.0, "n_matched_pairs": 0}
+
+    #mean cosine similarity across all matched pairs
+    matched_eeg = eeg_norm[matched_eeg_idx]
+    matched_meg = meg_norm[matched_meg_idx]
+    matched_similarity = float(np.sum(matched_eeg * matched_meg, axis=1).mean())
+
+    #random: null baseline — you shuffle the MEG indices so each EEG embedding is paired with a random, unrelated MEG embedding
+    #Alignment gap is the number you actually report. Positive means the model learned something real. A gap near zero even with decent matched similarity means your random baseline is inflated
+    rng = np.random.default_rng(seed=42)
+    shuffled_meg_idx = rng.permutation(matched_meg_idx)
+    random_similarity = float(np.sum(matched_eeg * meg_norm[shuffled_meg_idx], axis=1).mean())
+
+    return {
+        "matched_similarity": matched_similarity,
+        "random_similarity": random_similarity,
+        "alignment_gap": matched_similarity - random_similarity,
+        "n_matched_pairs": len(matched_eeg_idx),
+    }
 
 
 def compute_abstention_curve(
@@ -140,7 +245,52 @@ def compute_abstention_curve(
             'best_threshold_80pct': float — threshold achieving 80% accuracy
                                     with maximum coverage (or None if 80% unreachable)
     """
-    raise NotImplementedError
+    if confidence_thresholds is None:
+        confidence_thresholds = np.linspace(0, 1, 50)
+
+    # Normalize and compute full similarity matrix (n_samples, vocab_size)
+    def normalize(x):
+        return x / (np.linalg.norm(x, axis=1, keepdims=True) + 1e-8)
+
+    sim = normalize(neural_embeddings) @ normalize(text_embeddings).T
+
+    # Sort descending; confidence = gap between top-1 and top-2 scores
+    sorted_sims = np.sort(sim, axis=1)[:, ::-1]
+    confidence_scores = sorted_sims[:, 0] - sorted_sims[:, 1]
+
+    # Ground truth correctness per sample
+    # precomputes which samples the model got right before any abstention logic
+    vocab_index = {w: i for i, w in enumerate(vocab)}
+    gt_indices = np.array([vocab_index[l] for l in labels])
+    predicted = np.argmax(sim, axis=1)
+    correct = predicted == gt_indices
+
+
+    # each threshold, any sample whose confidence score falls below it is "abstained" — the model refuses to answer
+    coverage, accuracy = [], []
+    for t in confidence_thresholds:
+        retained = confidence_scores >= t
+        n_retained = retained.sum()
+        coverage.append(n_retained / len(labels))
+        accuracy.append(correct[retained].mean() if n_retained > 0 else 0.0)
+
+    coverage = np.array(coverage)
+    accuracy = np.array(accuracy)
+
+    # Find highest-coverage threshold that still hits 80% accuracy
+    # operating point where the model hits your accuracy target while abstaining as little as possible
+    above_80 = np.where(accuracy >= 0.8)[0]
+    best_threshold_80pct = (
+        float(confidence_thresholds[above_80[np.argmax(coverage[above_80])]])
+        if len(above_80) > 0 else None
+    )
+
+    return {
+        "thresholds": confidence_thresholds,
+        "coverage":   coverage,
+        "accuracy":   accuracy,
+        "best_threshold_80pct": best_threshold_80pct,
+    }
 
 
 def generate_stage1_report(
@@ -172,4 +322,135 @@ def generate_stage1_report(
     Returns:
         Path to written report.
     """
-    raise NotImplementedError
+    import os
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    lines = []
+
+    # Helper: appends a line to the report buffer
+    def w(line=""):
+        lines.append(line)
+
+    # ------------------------------------------------------------------ #
+    # Section 1: Per-modality retrieval metrics
+    # test_metrics is expected to be a dict of dicts, e.g.:
+    #   {"eeg": {"top1": 0.25, "top5": 0.6, ...}, "meg": {...}}
+    # ------------------------------------------------------------------ #
+    w("# Stage 1 Evaluation Report")
+    w()
+    w("## 1. Per-modality retrieval metrics")
+    w()
+    w("| Modality | Top-1 | Top-5 | Top-10 | MRR |")
+    w("|----------|-------|-------|--------|-----|")
+    for modality, metrics in test_metrics.items():
+        w(f"| {modality.upper()} "
+          f"| {metrics['top1']:.3f} "
+          f"| {metrics['top5']:.3f} "
+          f"| {metrics['top10']:.3f} "
+          f"| {metrics['mrr']:.3f} |")
+
+    # ------------------------------------------------------------------ #
+    # Section 2: Cross-subject generalization
+    # per_subject is a dict of {subject_id: metrics_dict}
+    # mean/std are dicts of {metric_name: float}, averaged across subjects
+    # ------------------------------------------------------------------ #
+    w()
+    w("## 2. Cross-subject generalization")
+    w()
+    w("### Per-subject breakdown")
+    w()
+    w("| Subject | Top-1 | Top-5 | Top-10 | MRR |")
+    w("|---------|-------|-------|--------|-----|")
+    for subject, metrics in cross_subject_metrics["per_subject"].items():
+        w(f"| {subject} "
+          f"| {metrics['top1']:.3f} "
+          f"| {metrics['top5']:.3f} "
+          f"| {metrics['top10']:.3f} "
+          f"| {metrics['mrr']:.3f} |")
+
+    w()
+    w("### Mean ± std across subjects")
+    w()
+    mean = cross_subject_metrics["mean"]
+    std  = cross_subject_metrics["std"]
+    w("| Metric | Mean | Std |")
+    w("|--------|------|-----|")
+    for key in ["top1", "top5", "top10", "mrr"]:
+        w(f"| {key} | {mean[key]:.3f} | {std[key]:.3f} |")
+
+    # ------------------------------------------------------------------ #
+    # Section 3: Cross-modal alignment
+    # matched_similarity: how similar same-word EEG/MEG pairs are
+    # random_similarity:  baseline — unrelated pairs
+    # alignment_gap:      matched - random; must be positive for real alignment
+    # ------------------------------------------------------------------ #
+    w()
+    w("## 3. Cross-modal alignment")
+    w()
+    w("| Metric | Value |")
+    w("|--------|-------|")
+    w(f"| Matched similarity  | {alignment_metrics['matched_similarity']:.3f} |")
+    w(f"| Random similarity   | {alignment_metrics['random_similarity']:.3f} |")
+    w(f"| Alignment gap       | {alignment_metrics['alignment_gap']:.3f} |")
+    w(f"| Matched pairs found | {alignment_metrics['n_matched_pairs']} |")
+
+    # Flag if the gap is negative — this would mean random pairs are closer
+    # on average than matched pairs, which indicates the shared space is broken
+    if alignment_metrics["alignment_gap"] <= 0:
+        w()
+        w("> **Warning:** alignment gap is non-positive. "
+          "The shared embedding space may not be meaningfully aligned.")
+
+    # ------------------------------------------------------------------ #
+    # Section 4: Abstention curve
+    # We sample 10 evenly spaced points from the threshold sweep to keep
+    # the table readable — logging every threshold would produce 50 rows
+    # ------------------------------------------------------------------ #
+    w()
+    w("## 4. Abstention curve")
+    w()
+    thresholds = abstention_metrics["thresholds"]
+    coverage   = abstention_metrics["coverage"]
+    accuracy   = abstention_metrics["accuracy"]
+    best_t     = abstention_metrics["best_threshold_80pct"]
+
+    w("| Threshold | Coverage | Accuracy |")
+    w("|-----------|----------|----------|")
+    n = len(thresholds)
+    sample_indices = [int(i * (n - 1) / 9) for i in range(10)]  # 10 evenly spaced rows
+    for i in sample_indices:
+        w(f"| {thresholds[i]:.3f} | {coverage[i]:.3f} | {accuracy[i]:.3f} |")
+
+    w()
+    if best_t is not None:
+        w(f"**Best threshold for ≥80% accuracy with maximum coverage:** `{best_t:.3f}`")
+    else:
+        w("**Note:** 80% accuracy was not achievable at any threshold.")
+
+    # ------------------------------------------------------------------ #
+    # Section 5: Failure cases
+    # Each failure case is a dict with keys:
+    #   'true_label'      — the correct word
+    #   'top3_predictions'— list of the model's top 3 guesses
+    #   'scores'          — corresponding cosine similarity scores
+    # We cap at 10 cases regardless of how many were passed in
+    # ------------------------------------------------------------------ #
+    w()
+    w("## 5. Representative failure cases")
+    w()
+    w("| # | True label | Top-3 predictions | Scores |")
+    w("|---|------------|-------------------|--------|")
+    for idx, case in enumerate(failure_cases[:10], 1):
+        preds  = ", ".join(case["top3_predictions"])
+        scores = ", ".join(f"{s:.3f}" for s in case["scores"])
+        w(f"| {idx} | {case['true_label']} | {preds} | {scores} |")
+
+    # ------------------------------------------------------------------ #
+    # Write the accumulated lines to disk as a single markdown file
+    # ------------------------------------------------------------------ #
+    report = "\n".join(lines)
+    with open(output_path, "w") as f:
+        f.write(report)
+
+    return output_path
+    
