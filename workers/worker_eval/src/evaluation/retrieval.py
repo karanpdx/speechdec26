@@ -19,6 +19,21 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+def _validate_retrieval_inputs(neural_embeddings, text_embeddings, labels, vocab):
+    if neural_embeddings.ndim != 2:
+        raise ValueError("neural_embeddings must be 2D: (n_samples, embed_dim)")
+    if text_embeddings.ndim != 2:
+        raise ValueError("text_embeddings must be 2D: (vocab_size, embed_dim)")
+    if neural_embeddings.shape[1] != text_embeddings.shape[1]:
+        raise ValueError("Embedding dimensions must match")
+    if neural_embeddings.shape[0] != len(labels):
+        raise ValueError("len(labels) must equal number of neural samples")
+    if text_embeddings.shape[0] != len(vocab):
+        raise ValueError("len(vocab) must equal number of text embeddings")
+    missing = sorted(set(labels) - set(vocab))
+    if missing:
+        raise ValueError(f"Labels missing from vocab: {missing[:10]}")
+    
 
 def compute_retrieval_metrics(
     neural_embeddings: np.ndarray,
@@ -45,6 +60,8 @@ def compute_retrieval_metrics(
         Dict with keys 'top{k}' for each k in k_values, plus 'mrr'.
         Example: {'top1': 0.25, 'top5': 0.60, 'top10': 0.75, 'mrr': 0.38}
     """
+    _validate_retrieval_inputs(neural_embeddings, text_embeddings, labels, vocab)
+    
     # Normalize embeddings for cosine similarity via dot product
     neural_norm = neural_embeddings / (np.linalg.norm(neural_embeddings, axis=1, keepdims=True) + 1e-8)
     text_norm = text_embeddings / (np.linalg.norm(text_embeddings, axis=1, keepdims=True) + 1e-8)
@@ -113,6 +130,8 @@ def compute_cross_subject_generalization(
             'mean': metrics dict averaged across subjects
             'std': metrics dict std across subjects
     """
+    _validate_retrieval_inputs(neural_embeddings, text_embeddings, labels, vocab)
+    
     # Group sample indices by subject
     subject_map = defaultdict(list)
     for i, sid in enumerate(subject_ids):
@@ -245,6 +264,8 @@ def compute_abstention_curve(
             'best_threshold_80pct': float — threshold achieving 80% accuracy
                                     with maximum coverage (or None if 80% unreachable)
     """
+    _validate_retrieval_inputs(neural_embeddings, text_embeddings, labels, vocab)
+    
     if confidence_thresholds is None:
         confidence_thresholds = np.linspace(0, 1, 50)
 
@@ -292,6 +313,28 @@ def compute_abstention_curve(
         "best_threshold_80pct": best_threshold_80pct,
     }
 
+
+def extract_failure_cases(
+    neural_embeddings: np.ndarray,
+    text_embeddings: np.ndarray,
+    labels: list,
+    vocab: list,
+    max_cases: int = 10,
+) -> list:
+    """
+    Return representative failure cases:
+    [
+        {
+            "true_label": "apple",
+            "predicted_label": "banana",
+            "top3_predictions": ["banana", "pear", "apple"],
+            "scores": [0.81, 0.73, 0.69],
+            "rank": 3,
+        },
+        ...
+    ]
+    """
+    
 
 def generate_stage1_report(
     test_metrics: dict,
