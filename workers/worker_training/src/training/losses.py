@@ -8,6 +8,7 @@ Classes:
 """
 
 import logging
+import math
 
 import torch
 import torch.nn as nn
@@ -42,7 +43,10 @@ class ContrastiveLoss(nn.Module):
             learnable_temp: If True, temperature is an nn.Parameter.
         """
         super().__init__()
-        raise NotImplementedError
+        if learnable_temp:
+            self.log_temp = nn.Parameter(torch.tensor(math.log(temperature_init)))
+        else:
+            self.register_buffer('log_temp', torch.tensor(math.log(temperature_init)))
 
     def forward(self, neural_emb: Tensor, text_emb: Tensor) -> Tensor:
         """
@@ -56,7 +60,16 @@ class ContrastiveLoss(nn.Module):
         Raises:
             ValueError: If batch size == 1.
         """
-        raise NotImplementedError
+        if neural_emb.shape[0] == 1:
+            raise ValueError("Contrastive loss is undefined for batch size 1")
+        n = F.normalize(neural_emb, dim=-1)
+        t = F.normalize(text_emb, dim=-1)
+        temp = torch.clamp(self.log_temp, min=math.log(0.01), max=math.log(100)).exp()
+        logits = temp * (n @ t.T)
+        batch = neural_emb.shape[0]
+        labels = torch.arange(batch, device=neural_emb.device)
+        loss = (F.cross_entropy(logits, labels) + F.cross_entropy(logits.T, labels)) / 2
+        return loss
 
 
 class CrossModalAlignmentLoss(nn.Module):
