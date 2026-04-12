@@ -2,6 +2,10 @@
 
 dataset_name: null
 subjects: "all"
+data_root: "fmri/ds002345-download"
+dataset_style: "narratives_bids"
+word_timing_dir: null
+require_word_labels: true
 
 # GLM parameters
 tr: null                    # repetition time in seconds (REQUIRED — check dataset card)

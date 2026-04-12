@@ -122,6 +122,34 @@ class TestEEGOutputSchema:
         assert callable(run_subject)
 
 
+class TestAudioPreprocLabelResolution:
+    def test_requires_external_word_labels_by_default(self):
+        from src.data.preprocess_eeg import _resolve_audio_preproc_labels
+
+        with pytest.raises(ValueError):
+            _resolve_audio_preproc_labels(np.array([1, 2, 1]), {"require_word_labels": True}, "S1")
+
+    def test_condition_labels_allowed_for_debugging(self):
+        from src.data.preprocess_eeg import _resolve_audio_preproc_labels
+
+        labels = _resolve_audio_preproc_labels(
+            np.array([1, 2, 1]),
+            {"require_word_labels": False},
+            "S1",
+        )
+        assert labels == ["condition_1", "condition_2", "condition_1"]
+
+    def test_event_label_map_is_used(self):
+        from src.data.preprocess_eeg import _resolve_audio_preproc_labels
+
+        labels = _resolve_audio_preproc_labels(
+            np.array([1, 2, 1]),
+            {"event_label_map": {"1": "cat", "2": "dog"}},
+            "S1",
+        )
+        assert labels == ["cat", "dog", "cat"]
+
+
 # ---------------------------------------------------------------------------
 # fMRI tests
 # ---------------------------------------------------------------------------
@@ -130,6 +158,35 @@ class TestFmriOutputSchema:
     def test_synthetic_npz_passes_validation(self):
         npz = make_synthetic_fmri_npz()
         assert_valid_fmri_output(npz)
+
+
+class TestFmriEventGranularity:
+    def test_story_level_events_are_rejected_for_word_pipeline(self):
+        from src.data.preprocess_fmri import _require_word_level_events
+        import pandas as pd
+
+        df = pd.DataFrame(
+            {
+                "onset": [0.0, 15.0],
+                "duration": [10.0, 400.0],
+                "trial_type": ["music", "story"],
+            }
+        )
+        with pytest.raises(ValueError):
+            _require_word_level_events(df, "story_events.tsv")
+
+    def test_many_word_events_are_accepted(self):
+        from src.data.preprocess_fmri import _infer_label_granularity
+        import pandas as pd
+
+        df = pd.DataFrame(
+            {
+                "onset": np.arange(12, dtype=float),
+                "duration": np.full(12, 0.4),
+                "trial_type": [f"word_{i}" for i in range(12)],
+            }
+        )
+        assert _infer_label_granularity(df) == "word"
 
 
 class TestPCA:

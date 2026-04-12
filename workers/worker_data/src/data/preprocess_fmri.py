@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 
 logger = logging.getLogger(__name__)
+_NON_WORD_LABELS = {"story", "music", "audio", "rest", "fixation", "baseline"}
 
 
 class _NumpyPCA:
@@ -146,7 +147,33 @@ def load_events(events_path: str, label_info: dict) -> "pd.DataFrame":
     if "kind" in df.columns:
         df = df[df["kind"] == "word"].copy()
 
-    return df[["onset", "duration", "trial_type"]].dropna(subset=["trial_type"])
+    result = df[["onset", "duration", "trial_type"]].dropna(subset=["trial_type"]).copy()
+    result["trial_type"] = result["trial_type"].astype(str).str.strip().str.lower()
+    return result
+
+
+def _infer_label_granularity(events_df) -> str:
+    labels = [str(label).strip().lower() for label in events_df["trial_type"].tolist()]
+    unique_labels = set(labels)
+    if not unique_labels:
+        raise ValueError("No labels found in events data")
+
+    if unique_labels <= _NON_WORD_LABELS:
+        return "sentence"
+    if len(events_df) < 10 and len(unique_labels) <= 3:
+        return "sentence"
+    return "word"
+
+
+def _require_word_level_events(events_df, source_path: str) -> None:
+    granularity = _infer_label_granularity(events_df)
+    if granularity != "word":
+        raise ValueError(
+            f"Event source {source_path} is not word-level. "
+            "The current file only contains story/sentence blocks, so this dataset still needs "
+            "forced-alignment word timings or TextGrid word annotations before it can be used "
+            "for the 10-word decoding pipeline."
+        )
 
 
 def _load_textgrid_events(textgrid_path: Path) -> "pd.DataFrame":
@@ -418,21 +445,42 @@ def save_betas(
     return str(out_path)
 
 
-def _find_word_events_tsv(subj_dir: Path, task_name: str) -> Path | None:
-    """Search for a word-level events source for a given story/task."""
-    # Try top-level dataset events file
-    dataset_root = subj_dir.parent
-    candidates = [
-        dataset_root / f"task-{task_name}_events.tsv",
-        subj_dir / f"task-{task_name}_events.tsv",
-        dataset_root / "derivatives" / "TextGrids" / f"{task_name}.TextGrid",
-    ]
-    # Also check within session func dirs
+def _iter_func_dirs(subj_dir: Path) -> list[Path]:
+    func_dirs = []
+    direct_func = subj_dir / "func"
+    if direct_func.exists():
+        func_dirs.append(direct_func)
     for ses_dir in sorted(subj_dir.glob("ses-*")):
         func_dir = ses_dir / "func"
         if func_dir.exists():
-            for tsv in func_dir.glob(f"*task-{task_name}*events.tsv"):
-                candidates.append(tsv)
+            func_dirs.append(func_dir)
+    return func_dirs
+
+
+def _find_word_events_tsv(subj_dir: Path, task_name: str, config: dict) -> Path | None:
+    """Search for an events or alignment source for a given story/task."""
+    dataset_root = subj_dir.parent
+    timing_root = Path(config["word_timing_dir"]) if config.get("word_timing_dir") else None
+    candidates = [
+        dataset_root / f"task-{task_name}_events.tsv",
+        subj_dir / f"task-{task_name}_events.tsv",
+        dataset_root / "stimuli" / f"{task_name}.TextGrid",
+        dataset_root / "stimuli" / f"{task_name}_audio.TextGrid",
+        dataset_root / "derivatives" / "TextGrids" / f"{task_name}.TextGrid",
+        dataset_root / "derivatives" / "forced_alignments" / f"{task_name}.TextGrid",
+    ]
+    if timing_root is not None:
+        candidates.extend(
+            [
+                timing_root / f"{task_name}.TextGrid",
+                timing_root / f"{task_name}_audio.TextGrid",
+                timing_root / f"{task_name}.tsv",
+            ]
+        )
+    # Also check within session func dirs
+    for func_dir in _iter_func_dirs(subj_dir):
+        for tsv in func_dir.glob(f"*task-{task_name}*events.tsv"):
+            candidates.append(tsv)
 
     for c in candidates:
         if c.exists():
@@ -471,10 +519,7 @@ def run_subject(subject_id: str, dataset_name: str, config: dict, pca=None) -> s
 
     # Find all BOLD NIfTI files (story tasks only — exclude localizers)
     bold_files = []
-    for ses_dir in sorted(subj_dir.glob("ses-*")):
-        func_dir = ses_dir / "func"
-        if not func_dir.exists():
-            continue
+    for func_dir in _iter_func_dirs(subj_dir):
         for bold in func_dir.glob("*_bold.nii*"):
             # Skip localizer tasks
             if any(x in bold.name for x in ["Localizer", "localizer", "Auditory", "Category"]):
@@ -495,7 +540,7 @@ def run_subject(subject_id: str, dataset_name: str, config: dict, pca=None) -> s
 
         logger.info(f"  Story: {task_name}  BOLD: {bold_path.name}")
 
-        events_tsv = _find_word_events_tsv(subj_dir, task_name)
+        events_tsv = _find_word_events_tsv(subj_dir, task_name, config)
         if events_tsv is None:
             logger.warning(
                 f"  No word-level events TSV found for task '{task_name}'. "
@@ -507,6 +552,7 @@ def run_subject(subject_id: str, dataset_name: str, config: dict, pca=None) -> s
         try:
             bold_img, _ = load_bold(str(bold_path))
             events_df = load_events(str(events_tsv), label_info={})
+            _require_word_level_events(events_df, str(events_tsv))
             mask_img = load_brain_mask(
                 mask_path=config.get("mask"), bold_img=bold_img
             )

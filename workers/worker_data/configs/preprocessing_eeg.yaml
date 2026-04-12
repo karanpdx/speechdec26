@@ -2,6 +2,12 @@
 
 dataset_name: eeg_mat
 subjects: "all"             # list of subject IDs or "all"
+data_root: "data-eeg/EEG Audio Dataset Preprocessing"
+dataset_style: "audio_preproc_mat"
+drop_aux_channels: true
+require_word_labels: true
+trial_label_path: null
+event_label_map: null
 
 # Dataset location
 # For .mat layout (e.g. EEG/S1.mat): set to the directory containing .mat files.

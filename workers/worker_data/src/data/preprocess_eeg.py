@@ -17,11 +17,142 @@ Output schema (saved as .npz):
 """
 
 import logging
+import json
 from pathlib import Path
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_audio_mat_channel_names(data_struct) -> list[str]:
+    raw_names = np.asarray(data_struct.dim[0, 0].chan[0, 0].eeg[0, 0]).ravel()
+    ch_names = []
+    for item in raw_names:
+        if isinstance(item, np.ndarray):
+            ch_names.append(str(item.ravel()[0]))
+        else:
+            ch_names.append(str(item))
+    return ch_names
+
+
+def _load_audio_preproc_mat(file_path: str, drop_aux_channels: bool = True) -> tuple[np.ndarray, float, list[str], np.ndarray]:
+    """
+    Load the local `data-eeg` MATLAB derivative format.
+
+    The files are already preprocessed and epoched:
+      - 60 trials per subject
+      - each trial stored as (time, channels)
+      - fsample.eeg = 64
+      - channel labels include 64 EEG channels plus EXG1/EXG2
+
+    Returns:
+        data: float32 (n_trials, n_channels, n_timepoints)
+        sfreq: float
+        ch_names: list[str]
+        event_codes: int array (n_trials,)
+    """
+    from scipy.io import loadmat
+
+    mat = loadmat(str(file_path), squeeze_me=False, struct_as_record=False)
+    data_struct = mat["data"][0, 0]
+
+    sfreq = float(np.asarray(data_struct.fsample[0, 0].eeg).ravel()[0])
+    ch_names = _extract_audio_mat_channel_names(data_struct)
+
+    trials = []
+    for trial in np.asarray(data_struct.eeg).ravel():
+        arr = np.asarray(trial, dtype=np.float32)
+        if arr.ndim != 2:
+            raise ValueError(f"Expected 2D trial array, got shape {arr.shape}")
+        trials.append(arr.T)  # stored as (time, channels) → pipeline expects (channels, time)
+
+    data = np.stack(trials, axis=0).astype(np.float32)
+    event_codes = np.array(
+        [int(ev.value[0, 0][0, 0]) for ev in np.asarray(data_struct.event[0, 0].eeg).ravel()],
+        dtype=np.int64,
+    )
+
+    if drop_aux_channels:
+        keep_indices = [i for i, name in enumerate(ch_names) if not name.upper().startswith("EXG")]
+        data = data[:, keep_indices, :]
+        ch_names = [ch_names[i] for i in keep_indices]
+
+    logger.info(
+        "Loaded audio-preproc EEG MAT %s with shape=%s sfreq=%.1f channels=%d",
+        file_path,
+        tuple(data.shape),
+        sfreq,
+        len(ch_names),
+    )
+    return data, sfreq, ch_names, event_codes
+
+
+def _load_trial_labels_from_file(label_path: str, subject_id: str, n_trials: int) -> list[str]:
+    path = Path(label_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Trial label file not found: {path}")
+
+    if path.suffix.lower() == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            if subject_id in payload:
+                labels = payload[subject_id]
+            elif "labels" in payload:
+                labels = payload["labels"]
+            else:
+                raise ValueError(f"JSON label file {path} does not contain subject '{subject_id}' or top-level 'labels'")
+        else:
+            labels = payload
+    else:
+        import pandas as pd
+
+        sep = "\t" if path.suffix.lower() == ".tsv" else ","
+        df = pd.read_csv(path, sep=sep)
+        if "subject_id" in df.columns:
+            df = df[df["subject_id"].astype(str) == str(subject_id)]
+        label_col = next((col for col in ("label", "word", "trial_type") if col in df.columns), None)
+        if label_col is None:
+            raise ValueError(f"Label file {path} must contain one of: label, word, trial_type")
+        labels = df[label_col].astype(str).tolist()
+
+    labels = [str(label).strip().lower() for label in labels]
+    if len(labels) != n_trials:
+        raise ValueError(f"Expected {n_trials} trial labels for {subject_id}, got {len(labels)} from {path}")
+    return labels
+
+
+def _resolve_audio_preproc_labels(event_codes: np.ndarray, config: dict, subject_id: str) -> list[str]:
+    """
+    Resolve word labels for the MATLAB derivative dataset.
+
+    The local files only expose binary event codes by default, so true word labels must
+    come from an external trial-label file or an explicit event-code mapping.
+    """
+    n_trials = int(len(event_codes))
+
+    label_path = config.get("trial_label_path")
+    if label_path:
+        return _load_trial_labels_from_file(label_path, subject_id, n_trials)
+
+    event_label_map = config.get("event_label_map")
+    if event_label_map:
+        labels = []
+        for code in event_codes.tolist():
+            label = event_label_map.get(code, event_label_map.get(str(code)))
+            if label is None:
+                raise ValueError(f"No label mapping found for event code {code}")
+            labels.append(str(label).strip().lower())
+        return labels
+
+    if config.get("require_word_labels", True):
+        raise ValueError(
+            "This EEG MATLAB derivative only exposes binary event codes (1/2), not word labels. "
+            "Provide `trial_label_path` with per-trial word labels or disable `require_word_labels` "
+            "to emit condition labels for debugging only."
+        )
+
+    return [f"condition_{code}" for code in event_codes.tolist()]
 
 
 def load_raw(file_path: str, dataset_card: dict):
@@ -462,6 +593,37 @@ def run_subject(subject_id: str, dataset_name: str, config: dict) -> str:
         Path to saved .npz file.
     """
     data_root = Path(config.get("data_root", "data/eeg_zuco"))
+<<<<<<< HEAD
+=======
+    dataset_style = config.get("dataset_style", "auto")
+
+    if dataset_style == "audio_preproc_mat" or (
+        dataset_style == "auto" and any(data_root.glob("S*_data_preproc.mat"))
+    ):
+        mat_path = data_root / f"{subject_id}_data_preproc.mat"
+        if not mat_path.exists():
+            raise FileNotFoundError(f"MAT file not found: {mat_path}")
+
+        data, sfreq, ch_names, event_codes = _load_audio_preproc_mat(
+            str(mat_path),
+            drop_aux_channels=bool(config.get("drop_aux_channels", True)),
+        )
+        labels = _resolve_audio_preproc_labels(event_codes, config, subject_id)
+        data = normalize(data)
+        event_onsets = np.zeros(data.shape[0], dtype=np.float64)
+        output_dir = str(Path(config["output_dir"]) / dataset_name / "eeg")
+        return save_epochs(
+            data,
+            labels,
+            subject_id,
+            sfreq,
+            ch_names,
+            event_onsets,
+            output_dir,
+        )
+
+    subj_dir = data_root / subject_id
+>>>>>>> 93803a8df7332e5540ac3a917ab4d435796e0b87
 
     # Auto-detect format: .mat flat layout takes priority
     mat_file = data_root / f"{subject_id}.mat"
@@ -549,8 +711,10 @@ def run_all_subjects(dataset_name: str, config_path: str) -> list[str]:
         config = yaml.safe_load(f)
 
     data_root = Path(config.get("data_root", "data/eeg_zuco"))
+    dataset_style = config.get("dataset_style", "auto")
     subjects = config.get("subjects", "all")
 
+<<<<<<< HEAD
     if subjects == "all":
         mat_files = sorted(data_root.glob("*.mat"))
         if mat_files:
@@ -560,6 +724,16 @@ def run_all_subjects(dataset_name: str, config_path: str) -> list[str]:
             subjects = sorted(
                 [d.name for d in data_root.iterdir() if d.is_dir() and d.name.startswith("sub-")]
             )
+=======
+    if subjects == "all" and (
+        dataset_style == "audio_preproc_mat" or (dataset_style == "auto" and any(data_root.glob("S*_data_preproc.mat")))
+    ):
+        subjects = sorted(p.name.replace("_data_preproc.mat", "") for p in data_root.glob("S*_data_preproc.mat"))
+    elif subjects == "all":
+        subjects = sorted(
+            [d.name for d in data_root.iterdir() if d.is_dir() and d.name.startswith("sub-")]
+        )
+>>>>>>> 93803a8df7332e5540ac3a917ab4d435796e0b87
 
     logger.info(f"Running EEG preprocessing for {len(subjects)} subject(s): {subjects}")
     paths = []
