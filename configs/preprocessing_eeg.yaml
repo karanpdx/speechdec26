@@ -2,15 +2,14 @@
 
 dataset_name: eeg_mat
 subjects: "all"
-data_root: "data-eeg/EEG Audio Dataset Preprocessing"
+# Point this at the local staged directory after syncing from S3.
+# Default assumes the S3 eeg-data folder contains the existing local dataset layout.
+data_root: "data/raw/eeg-data/EEG Audio Dataset Preprocessing"
 dataset_style: "audio_preproc_mat"
 drop_aux_channels: true
 require_word_labels: true
 trial_label_path: null
 event_label_map: null
-
-# Dataset location (.mat flat layout or BIDS sub-* layout)
-data_root: "EEG"
 
 l_freq: 0.1
 h_freq: 40.0
@@ -23,10 +22,5 @@ baseline: [-0.1, 0.0]
 target_sfreq: 256.0
 n_ica_components: 20
 reject_threshold: null
-
-# .mat-specific: trigger codes to use as stimulus onsets (null = all events)
-stimulus_codes: null
-# Optional code→label mapping, e.g. {131: "left", 132: "right"}
-event_code_labels: {}
 
 output_dir: "data/processed"

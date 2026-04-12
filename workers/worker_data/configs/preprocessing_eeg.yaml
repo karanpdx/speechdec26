@@ -2,17 +2,13 @@
 
 dataset_name: eeg_mat
 subjects: "all"             # list of subject IDs or "all"
-data_root: "data-eeg/EEG Audio Dataset Preprocessing"
+# Point this at the local staged directory after syncing from S3.
+data_root: "data/raw/eeg-data/EEG Audio Dataset Preprocessing"
 dataset_style: "audio_preproc_mat"
 drop_aux_channels: true
 require_word_labels: true
 trial_label_path: null
 event_label_map: null
-
-# Dataset location
-# For .mat layout (e.g. EEG/S1.mat): set to the directory containing .mat files.
-# For BIDS .vhdr layout: set to the directory containing sub-* subdirectories.
-data_root: "EEG"
 
 # Filtering
 l_freq: 0.1                 # high-pass cutoff (Hz)
@@ -32,17 +28,5 @@ n_ica_components: 20        # ICA components to fit
 
 # Epoch rejection
 reject_threshold: null      # peak-to-peak threshold in V, or null to disable
-
-# --- .mat-specific settings ---
-# Trigger codes to use as stimulus onsets. null = use all events.
-# Observed in this dataset: 131, 132, 133, 135, 137 (possible word classes),
-#   141, 150, 160, 191, 192, 224, 240, 248, 252, 254 (control/rest markers).
-# Set to a list to restrict, e.g.: [131, 132, 133, 135, 137]
-stimulus_codes: null
-
-# Optional: map trigger code integer → word label string.
-# e.g.: {131: "left", 132: "right", 133: "up", 135: "down", 137: "select"}
-# If empty, labels default to "code_<N>".
-event_code_labels: {}
 
 output_dir: "data/processed"

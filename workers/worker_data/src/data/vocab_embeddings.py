@@ -40,8 +40,16 @@ def load_bert():
         logger.warning("transformers not installed; using deterministic fallback vocab embeddings")
         return None, None
 
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-    model = AutoModel.from_pretrained("bert-base-uncased")
+    try:
+        tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", local_files_only=True)
+        model = AutoModel.from_pretrained("bert-base-uncased", local_files_only=True)
+    except Exception as exc:
+        logger.warning(
+            "bert-base-uncased is unavailable in the local cache; using deterministic fallback vocab embeddings (%s)",
+            exc,
+        )
+        return None, None
+
     model.eval()
     return tokenizer, model
 

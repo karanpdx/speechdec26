@@ -2,6 +2,8 @@
 
 dataset_name: null
 subjects: "all"
+# Point this at the local staged directory after syncing from S3.
+data_root: "data/raw/masc_meg"
 
 apply_maxwell: true
 crosstalk_file: null

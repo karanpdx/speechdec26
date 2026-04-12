@@ -31,3 +31,4 @@ def test_stage_train_scripts_import():
     import_module("scripts.train_stage1")
     import_module("scripts.train_stage2")
     import_module("scripts.run_alignment")
+    import_module("scripts.sync_s3_data")

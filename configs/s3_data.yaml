@@ -1,0 +1,23 @@
+# S3 raw-data staging configuration
+#
+# Use either:
+# 1. bucket + optional prefix + relative dataset source names
+# or
+# 2. full s3:// URIs in each dataset source field
+
+bucket: "kazuma-neuro-datasets"
+prefix: null
+local_root: "data/raw"
+aws_profile: null
+aws_region: "us-east-2"
+
+datasets:
+  eeg:
+    source: "s3://kazuma-neuro-datasets/eeg-data/"
+    local_path: "data/raw/eeg-data"
+  fmri:
+    source: "s3://kazuma-neuro-datasets/fmri-data/"
+    local_path: "data/raw/fmri-data"
+  meg:
+    source: "s3://kazuma-neuro-datasets/masc_meg/"
+    local_path: "data/raw/masc_meg"
