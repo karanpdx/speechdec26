@@ -1,8 +1,10 @@
 # EEG Preprocessing Configuration
-# Fill in dataset_name and subjects before running.
 
-dataset_name: null
+dataset_name: eeg_mat
 subjects: "all"
+
+# Dataset location (.mat flat layout or BIDS sub-* layout)
+data_root: "EEG"
 
 l_freq: 0.1
 h_freq: 40.0
@@ -15,5 +17,10 @@ baseline: [-0.1, 0.0]
 target_sfreq: 256.0
 n_ica_components: 20
 reject_threshold: null
+
+# .mat-specific: trigger codes to use as stimulus onsets (null = all events)
+stimulus_codes: null
+# Optional code→label mapping, e.g. {131: "left", 132: "right"}
+event_code_labels: {}
 
 output_dir: "data/processed"
