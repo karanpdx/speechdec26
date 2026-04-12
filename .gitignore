@@ -4,3 +4,7 @@ __pycache__/
 venv/
 data/
 ag3kj/
+data-eeg/
+data-fmri/
+data-meg/
+fmri/
