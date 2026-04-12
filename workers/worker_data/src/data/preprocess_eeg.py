@@ -593,8 +593,6 @@ def run_subject(subject_id: str, dataset_name: str, config: dict) -> str:
         Path to saved .npz file.
     """
     data_root = Path(config.get("data_root", "data/eeg_zuco"))
-<<<<<<< HEAD
-=======
     dataset_style = config.get("dataset_style", "auto")
 
     if dataset_style == "audio_preproc_mat" or (
@@ -621,9 +619,6 @@ def run_subject(subject_id: str, dataset_name: str, config: dict) -> str:
             event_onsets,
             output_dir,
         )
-
-    subj_dir = data_root / subject_id
->>>>>>> 93803a8df7332e5540ac3a917ab4d435796e0b87
 
     # Auto-detect format: .mat flat layout takes priority
     mat_file = data_root / f"{subject_id}.mat"
@@ -714,8 +709,11 @@ def run_all_subjects(dataset_name: str, config_path: str) -> list[str]:
     dataset_style = config.get("dataset_style", "auto")
     subjects = config.get("subjects", "all")
 
-<<<<<<< HEAD
-    if subjects == "all":
+    if subjects == "all" and (
+        dataset_style == "audio_preproc_mat" or (dataset_style == "auto" and any(data_root.glob("S*_data_preproc.mat")))
+    ):
+        subjects = sorted(p.name.replace("_data_preproc.mat", "") for p in data_root.glob("S*_data_preproc.mat"))
+    elif subjects == "all":
         mat_files = sorted(data_root.glob("*.mat"))
         if mat_files:
             subjects = [f.stem for f in mat_files]
@@ -724,16 +722,6 @@ def run_all_subjects(dataset_name: str, config_path: str) -> list[str]:
             subjects = sorted(
                 [d.name for d in data_root.iterdir() if d.is_dir() and d.name.startswith("sub-")]
             )
-=======
-    if subjects == "all" and (
-        dataset_style == "audio_preproc_mat" or (dataset_style == "auto" and any(data_root.glob("S*_data_preproc.mat")))
-    ):
-        subjects = sorted(p.name.replace("_data_preproc.mat", "") for p in data_root.glob("S*_data_preproc.mat"))
-    elif subjects == "all":
-        subjects = sorted(
-            [d.name for d in data_root.iterdir() if d.is_dir() and d.name.startswith("sub-")]
-        )
->>>>>>> 93803a8df7332e5540ac3a917ab4d435796e0b87
 
     logger.info(f"Running EEG preprocessing for {len(subjects)} subject(s): {subjects}")
     paths = []
